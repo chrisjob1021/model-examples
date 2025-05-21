@@ -7,7 +7,9 @@ This repository contains a collection of machine learning and deep learning mode
 - **Pointer Network** ([lstm/pointer-network.ipynb](lstm/pointer-network.ipynb))
   - Demonstrates how to use a Pointer Network to solve a toy sorting task.
   - Inspired by the paper: [Pointer Networks (Vinyals et al., 2015) - arXiv:1506.03134](https://arxiv.org/abs/1506.03134)
-
+- **Toy CNN** ([cnn/toy_cnn.py](cnn/toy_cnn.py))
+  - Demonstrates a small convolutional network inspired by AlexNet.
+ 
 More model examples will be added to this repository over time.
 
 ### Installation
