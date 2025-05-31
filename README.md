@@ -7,6 +7,9 @@ This repository contains a collection of machine learning and deep learning mode
 - **Pointer Network** ([lstm/pointer-network.ipynb](lstm/pointer-network.ipynb))
   - Demonstrates how to use a Pointer Network to solve a toy sorting task.
   - Inspired by the paper: [Pointer Networks (Vinyals et al., 2015) - arXiv:1506.03134](https://arxiv.org/abs/1506.03134)
+- **PReLU CNN** ([prelu/prelu-example.ipynb](prelu/prelu-example.ipynb))
+  - Shows how to use the Parametric ReLU activation in a simple convolutional network.
+  - Includes an optional section demonstrating training with the HuggingFace Trainer.
 
 More model examples will be added to this repository over time.
 
