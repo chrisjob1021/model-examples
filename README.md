@@ -10,6 +10,10 @@ This repository contains a collection of machine learning and deep learning mode
 
 More model examples will be added to this repository over time.
 
+## Gradients
+
+- [gradients/lstm.ipynb](gradients/lstm.ipynb) - Explore LSTM gradients.
+
 ### Installation
 
 1. **Clone the repository:**
@@ -45,6 +49,7 @@ More model examples will be added to this repository over time.
 
 ## References
 - [Pointer Networks (Vinyals et al., 2015) - arXiv:1506.03134](https://arxiv.org/abs/1506.03134)
+- [Generating Sequences With Recurrent Neural Networks (Graves, 2014) - arXiv:1409.0473](https://arxiv.org/pdf/1409.0473)
 
 ## License
 
