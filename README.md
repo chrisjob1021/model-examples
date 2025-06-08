@@ -7,6 +7,8 @@ This repository contains a collection of machine learning and deep learning mode
 - **Pointer Network** ([lstm/pointer-network.ipynb](lstm/pointer-network.ipynb))
   - Demonstrates how to use a Pointer Network to solve a toy sorting task.
   - Inspired by the paper: [Pointer Networks (Vinyals et al., 2015) - arXiv:1506.03134](https://arxiv.org/abs/1506.03134)
+- **RNNSearch (Attention NMT)** ([nmt/rnns_search.py](nmt/rnns_search.py))
+  - Step-by-step demonstration of Bahdanau attention.
 
 More model examples will be added to this repository over time.
 
@@ -49,7 +51,7 @@ More model examples will be added to this repository over time.
 
 ## References
 - [Pointer Networks (Vinyals et al., 2015) - arXiv:1506.03134](https://arxiv.org/abs/1506.03134)
-- [Generating Sequences With Recurrent Neural Networks (Graves, 2014) - arXiv:1409.0473](https://arxiv.org/pdf/1409.0473)
+- [Neural Machine Translation by Jointly Learning to Align and Translate (Bahdanau et al., 2014) - arXiv:1409.0473](https://arxiv.org/pdf/1409.0473)
 
 ## License
 
