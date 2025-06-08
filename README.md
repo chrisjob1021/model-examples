@@ -18,7 +18,7 @@ This repository contains a collection of machine learning and deep learning mode
 
 ## Running The Examples
 
-### Installation
+### Setup
 
 1. **Set up a virtual environment and install dependencies:**
    ```sh
