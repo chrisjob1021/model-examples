@@ -83,6 +83,8 @@ class Decoder(nn.Module):
             # - W_a: (2*hidden_dim, hidden_dim) - weight matrix for attention
             # - tanh(W_a(s_i_rep, h_j)): (B, T_x, hidden_dim) - transformed energy scores
             # - v_a: (hidden_dim, 1) - bias vector for attention
+            # We squeeze the last dimension (-1) because v_a produces a tensor of shape (B, T_x, 1)
+            # and we want to remove this singleton dimension to get (B, T_x) for the energy scores
             energy = self.v_a(torch.tanh(self.W_a(torch.cat([s_i_rep, h_j], dim=2)))).squeeze(-1)
 
             # Get attention weights using softmax to normalize scores to probabilities  
@@ -90,33 +92,28 @@ class Decoder(nn.Module):
             alpha_ij = torch.softmax(energy, dim=1)
             
             # Compute context vector as weighted sum of encoder states
-            # - alpha_ij: (B, T_x) - attention weights
+            # - alpha_ij: (B, 1, T_x) - attention weights
             # - h_j: (B, T_x, 2*hidden_dim) - encoder states
+            # When you multiply each batch: (1, T_x) x (T_x, 2hidden_dim) → (1, 2hidden_dim)
             # - c_i: (B, 2*hidden_dim) - context vector
-            # Why use bmm here?
-            # This is a very efficient way to compute the context vector as a weighted sum of encoder hidden states for each example in the batch, using the attention weights.
+
             # bmm is a batch matrix multiplication, which is a more efficient way to compute the context vector than a for loop.
             c_i = torch.bmm(alpha_ij.unsqueeze(1), h_j).squeeze(1)  # (B, 2*hidden_dim)
 
-            # Generate output probabilities using maxout
-            # Input shape to maxout: (B, hidden_dim + 2*hidden_dim)
-            # - s_i: (B, hidden_dim) - decoder state
-            # - c_i: (B, 2*hidden_dim) - context vector
-            # Concatenate decoder state and context vector
-            # s_i: (B, hidden_dim), c_i: (B, 2*hidden_dim)
-            # Result: (B, 3*hidden_dim)
             # Maxout is a non-linear activation function that takes the maximum of multiple linear transformations
-            # Here it takes the concatenated decoder state and context vector, applies a linear transformation,
-            # and then takes the maximum value along the feature dimension
-            o_i = self.maxout(torch.cat([s_i, c_i], dim=1))
+            # Here we concatenate decoder state and context vector
+            #  s_i: (B, hidden_dim), c_i: (B, 2*hidden_dim)
+            # Concatenation result: (B, 3*hidden_dim)
+            o_i = self.maxout(torch.cat([s_i, c_i], dim=1)) # (B, 2 * vocab_size)
+
             # Reshape for maxout operation
             # - After max: (B, 2 * vocab_size) - take maximum of each group
             # - After view: (B, 2, vocab_size) - groups of 2 features
-            # The linear layer produces two sets of outputs for each vocabulary entry (i.e., 2 * vocab_size).
-            # The .view(B, 2, -1) reshapes this to (B, 2, vocab_size), so for each vocabulary entry, there are two values.
-            # .max(dim=1)[0] takes the maximum of the two for each vocabulary entry, implementing the maxout operation described above.
+            # .max(dim=1)[0] takes the maximum of the two for each vocabulary entry
             o_i = o_i.view(B, 2, -1).max(dim=1)[0]
+            # o_i shape: (B, vocab_size) - batch of output logits for each vocabulary token
             outputs.append(o_i)
+        # Stack outputs along sequence dimension (dim=1) to create tensor of shape (B, T_y, vocab_size)
         return torch.stack(outputs, dim=1)
 
 class RNNsearch(nn.Module):
@@ -131,6 +128,10 @@ class RNNsearch(nn.Module):
         h_j = self.encoder(x)
         # Decode target sequence with attention
         logits = self.decoder(y, h_j)
+        # logits shape: (B, T_y, vocab_size) where:
+        # - B: batch size
+        # - T_y: target sequence length
+        # - vocab_size: size of target vocabulary
         return logits
 
 # ---------------------------
@@ -143,12 +144,16 @@ def generate_batch(batch_size=16, max_len=5, vocab_size=12, start_token=10):
     # Initialize input and target tensors
     x = torch.zeros(batch_size, max_len, dtype=torch.long)
     y = torch.zeros(batch_size, max_len + 1, dtype=torch.long)
+    # Loop through each sequence in the batch
     for i, L in enumerate(lengths):
-        # Generate random tokens for input sequence
+        # Generate random tokens for input sequence, excluding padding (0) and start token
         tokens = torch.randint(1, vocab_size - 1, (L,))
+        # Fill input sequence up to its length L
         x[i, :L] = tokens
-        # Set start token and reversed sequence as target
+        # Set start token at beginning of target sequence
         y[i, 0] = start_token
+        # Fill target sequence with reversed input tokens, starting after start token
+        # It's a toy example, which is why we're using a reversed sequence
         y[i, 1:L + 1] = tokens.flip(0)
     return x.to(DEVICE), y.to(DEVICE)
 
@@ -168,8 +173,12 @@ if __name__ == "__main__":
         # Clear previous gradients
         optim.zero_grad()
         # Forward pass (excluding last target token)
-        logits = model(src, tgt[:, :-1])
+        # The last token in the target sequence has no "next" token to predict, so it is not used as an input during training.
+        logits = model(src, tgt[:, :-1]) # (B, T_y, vocab_size)
+        
         # Compute loss (excluding first target token which is start token)
+        # Reshape logits from (B, T_y, vocab_size) to (B*T_y, vocab_size) for cross entropy
+        # Reshape targets from (B, T_y) to (B*T_y) to match logits
         loss = loss_fn(logits.reshape(-1, TGT_VOCAB), tgt[:, 1:].reshape(-1))
         # Backward pass and optimization
         loss.backward()
