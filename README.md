@@ -9,6 +9,8 @@ This repository contains a collection of machine learning and deep learning mode
   - Inspired by the paper: [Pointer Networks (Vinyals et al., 2015) - arXiv:1506.03134](https://arxiv.org/abs/1506.03134)
 - **RNNsearch** ([rnnsearch/toy_rnnsearch.py](rnnsearch/toy_rnnsearch.py))
   - Minimal implementation of the attention-based model from [Bahdanau et al., 2014 - arXiv:1409.0473](https://arxiv.org/pdf/1409.0473.pdf)
+- **Convolutional Neural Network** ([cnn/cnn.ipynb](cnn/cnn.ipynb))
+  - Basic CNN example for image classification.
 
 More model examples will be added to this repository over time.
 
@@ -24,17 +26,12 @@ More model examples will be added to this repository over time.
    cd model-examples
    ```
 
-2. **(Optional) Create and activate a virtual environment:**
+2. **Set up a virtual environment and install dependencies:**
    ```sh
-   python3 -m venv .venv
-   source .venv/bin/activate
+   ./scripts/setup_venv.sh
    ```
-
-3. **Install dependencies:**
-   ```sh
-   pip install torch jupyter
-   ```
-   You may need to install additional dependencies as new examples are added.
+   The script creates a `.venv` folder and installs the packages listed in
+   `requirements.txt`.
 
 ### Running the Example Notebooks
 
@@ -45,6 +42,7 @@ More model examples will be added to this repository over time.
 
 2. **Open the desired notebook:**
    - For the pointer network example, navigate to `lstm/pointer-network.ipynb` in the Jupyter interface and open it.
+   - For the CNN example, open `cnn/cnn.ipynb`.
 
 3. **Run the notebook cells:**
    - Follow the instructions and run the cells to see the model in action.
