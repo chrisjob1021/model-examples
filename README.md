@@ -7,6 +7,8 @@ This repository contains a collection of machine learning and deep learning mode
 - **Pointer Network** ([lstm/pointer-network.ipynb](lstm/pointer-network.ipynb))
   - Demonstrates how to use a Pointer Network to solve a toy sorting task.
   - Inspired by the paper: [Pointer Networks (Vinyals et al., 2015) - arXiv:1506.03134](https://arxiv.org/abs/1506.03134)
+- **RNNsearch** ([rnnsearch/toy_rnnsearch.py](rnnsearch/toy_rnnsearch.py))
+  - Minimal implementation of the attention-based model from [Bahdanau et al., 2014 - arXiv:1409.0473](https://arxiv.org/pdf/1409.0473.pdf)
 
 More model examples will be added to this repository over time.
 
