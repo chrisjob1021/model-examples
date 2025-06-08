@@ -7,6 +7,8 @@ This repository contains a collection of machine learning and deep learning mode
 - **Pointer Network** ([lstm/pointer-network.ipynb](lstm/pointer-network.ipynb))
   - Demonstrates how to use a Pointer Network to solve a toy sorting task.
   - Inspired by the paper: [Pointer Networks (Vinyals et al., 2015) - arXiv:1506.03134](https://arxiv.org/abs/1506.03134)
+- **CNN with PReLU** ([cnn/prelu_cifar10.py](cnn/prelu_cifar10.py))
+  - Train a simple CNN on CIFAR10 with or without [Parametric ReLU (He et al., 2015)](https://arxiv.org/abs/1502.01852).
 
 More model examples will be added to this repository over time.
 
