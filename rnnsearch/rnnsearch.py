@@ -54,56 +54,41 @@ class Decoder(nn.Module):
         # y: (B, T_y) - target sequence including start token
         B, T_x, _ = h_j.size()
         # Initialize decoder hidden state and context vector
-        h_i = torch.zeros(1, B, self.hidden_dim, device=h_j.device)  # s_{i-1}
+        h_i = torch.zeros(1, B, self.hidden_dim, device=h_j.device)  # s_{i-1} - first dimension is num_layers=1 for GRU
         c_i = torch.zeros(B, 2 * self.hidden_dim, device=h_j.device)
 
         outputs = []
         for t in range(y.size(1)):
-            # Get previous token and its embedding
             # "At each time step i, the input to the decoder is the embedding of the previous target symbol y_{i-1}."
             y_prev = y[:, t]
-            y_emb = self.embedding(y_prev).unsqueeze(1)  # (B, 1, embed_dim)
-            # Concatenate embedding with context vector to provide the decoder with both:
-            # 1. Information about the current token (y_emb)
-            # 2. Relevant source sequence information (c_i) for better translation
-            # Concatenate along feature dimension (dim=2) to combine:
-            # - y_emb: (B, 1, embed_dim) - current token embedding
-            # - c_i: (B, 1, 2*hidden_dim) - context vector
-            # Result: (B, 1, embed_dim + 2*hidden_dim)
-            # "The input to the decoder at each time step is the concatenation of the embedding of the previous target symbol and the context vector c_i."
-            gru_in = torch.cat([y_emb, c_i.unsqueeze(1)], dim=2)
-            # Process through GRU
+            y_emb = self.embedding(y_prev).unsqueeze(1)  # (B, 1, embed_dim) - second dimension is sequence length
+
+            # The input to the decoder at each time step is the concatenation of the embedding of the previous target symbol and the context vector c_i
+            gru_in = torch.cat([y_emb, c_i.unsqueeze(1)], dim=2)  # (B, 1, embed_dim + 2*hidden_dim)
+
             # s_i is the decoder's hidden state at time step i, representing the current state of the decoder
-            # It's computed by the GRU using the previous hidden state (h_i) and the current input (gru_in)
-            s_i, h_i = self.gru(gru_in, h_i)  # s_i: (B, 1, hidden_dim)
-            # Remove the batch dimension since we're processing one token at a time
-            s_i = s_i.squeeze(1)  # (B, hidden_dim)
-            # "The hidden state of the decoder at time i is computed as s_i = f(s_{i-1}, y_{i-1}, c_i), where f is a gated recurrent unit (GRU)."
+            s_i, h_i = self.gru(gru_in, h_i)  
+            s_i = s_i.squeeze(1)  # (B, hidden_dim) - Remove the batch dimension since we're processing one token at a time
+
             # Compute attention scores
             # Expand decoder state s_i to match encoder states h_j dimensions for attention computation
             # s_i: (B, hidden_dim) -> s_i_rep: (B, T_x, hidden_dim)
-            # We repeat s_i T_x times because we need to compute attention scores between
-            # the current decoder state s_i and EACH encoder state h_j
-            # This allows parallel computation of attention scores for all encoder states
+            # We repeat s_i T_x times because we need to compute attention scores between the current decoder state s_i and each encoder state h_j
+            # This allows you to compute the attention "energy" for every encoder position for the current decoder step, regardless of length of the target vs source sequence
             s_i_rep = s_i.unsqueeze(1).repeat(1, T_x, 1)
-            # "The alignment model computes e_{ij} = a(s_{i-1}, h_j) for all j."
+
             # Compute energy scores for each encoder state
             # - s_i_rep: (B, T_x, hidden_dim) - repeated decoder state
             # - h_j: (B, T_x, 2*hidden_dim) - encoder states
             # - W_a: (2*hidden_dim, hidden_dim) - weight matrix for attention
-            # - v_a: (hidden_dim, 1) - bias vector for attention
             # - tanh(W_a(s_i_rep, h_j)): (B, T_x, hidden_dim) - transformed energy scores
-            # Compute attention scores by:
-            # 1. Concatenate decoder state with encoder states
-            # 2. Transform through W_a and tanh
-            # 3. Project to scalar scores with v_a
-            # 4. Remove last dimension (squeeze(-1)) to get (B, T_x) shape
+            # - v_a: (hidden_dim, 1) - bias vector for attention
             energy = self.v_a(torch.tanh(self.W_a(torch.cat([s_i_rep, h_j], dim=2)))).squeeze(-1)
-            # The energy (alignment score) between the current decoder state and each encoder state is computed using a feedforward network.
+
             # Get attention weights using softmax to normalize scores to probabilities  
             # alpha_ij: (B, T_x) - attention weights for each encoder state
-            # The attention weights are computed by normalizing the energy scores with a softmax.
             alpha_ij = torch.softmax(energy, dim=1)
+            
             # Compute context vector as weighted sum of encoder states
             # - alpha_ij: (B, T_x) - attention weights
             # - h_j: (B, T_x, 2*hidden_dim) - encoder states
