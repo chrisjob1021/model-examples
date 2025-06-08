@@ -120,14 +120,17 @@ class Decoder(nn.Module):
             # Concatenate decoder state and context vector
             # s_i: (B, hidden_dim), c_i: (B, 2*hidden_dim)
             # Result: (B, 3*hidden_dim)
+            # Maxout is a non-linear activation function that takes the maximum of multiple linear transformations
+            # Here it takes the concatenated decoder state and context vector, applies a linear transformation,
+            # and then takes the maximum value along the feature dimension
             o_i = self.maxout(torch.cat([s_i, c_i], dim=1))
             # Reshape for maxout operation
-            # Input shape: (B, 3*hidden_dim)
-            # - After view: (B, 2, hidden_dim) - groups of 2 features
-            # - After max: (B, hidden_dim) - take maximum of each group
-            # This implements the maxout activation function which takes the maximum of groups of features.
-            # Maxout helps with gradient flow and can learn more complex activation functions than ReLU.
-            o_i = o_i.view(B, 2, -1).max(dim=1)[0]  # Maxout operation
+            # - After max: (B, 2 * vocab_size) - take maximum of each group
+            # - After view: (B, 2, vocab_size) - groups of 2 features
+            # The linear layer produces two sets of outputs for each vocabulary entry (i.e., 2 * vocab_size).
+            # The .view(B, 2, -1) reshapes this to (B, 2, vocab_size), so for each vocabulary entry, there are two values.
+            # .max(dim=1)[0] takes the maximum of the two for each vocabulary entry, implementing the maxout operation described above.
+            o_i = o_i.view(B, 2, -1).max(dim=1)[0]
             outputs.append(o_i)
         return torch.stack(outputs, dim=1)
 
