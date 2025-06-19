@@ -17,7 +17,6 @@ from transformers import (
     Trainer, 
     TrainingArguments
 )
-from accelerate import Accelerator
 import numpy as np
 from PIL import Image
 
@@ -142,7 +141,7 @@ class ManualMaxPool2d(nn.Module):
 # -------------------------------------------------------
 # Simple CNN using the manual layers
 # -------------------------------------------------------
-class ManualCNN(nn.Module):
+class CNN(nn.Module):
     """Very small CNN constructed from the manual layers above.
 
     Parameters
@@ -197,15 +196,22 @@ def preprocess_images(examples):
     images = []
     for image in examples['img']:
         if isinstance(image, str):
-            # If image is a file path, load it
+            # If image is a file path, load it and convert to RGB color mode (3 channels: Red, Green, Blue)
+            # This ensures consistent color format regardless of input image type
             image = Image.open(image).convert('RGB')
         elif isinstance(image, np.ndarray):
-            # If image is numpy array, convert to PIL
+            # If image is numpy array, convert to PIL Image (Python Imaging Library)
             image = Image.fromarray(image)
         
         # Convert to tensor and normalize
         image = torch.tensor(np.array(image), dtype=torch.float32)
-        image = image.permute(2, 0, 1) / 255.0  # HWC -> CHW and normalize to [0,1]
+        # Step 1: Rearrange dimensions from Height-Width-Channel (HWC) to Channel-Height-Width (CHW)
+        # This is required because PyTorch expects images in CHW format, but PIL/OpenCV use HWC
+        image = image.permute(2, 0, 1)
+        
+        # Step 2: Normalize pixel values from [0, 255] range to [0, 1] range
+        # Neural networks work better with normalized inputs, and 255.0 ensures float division
+        image = image / 255.0
         images.append(image)
     
     examples['pixel_values'] = images
@@ -240,11 +246,8 @@ class CNNTrainer(Trainer):
 # -------------------------------------------------------
 # Main training function
 # -------------------------------------------------------
-def train_cnn_with_huggingface(use_prelu=False, use_builtin_conv=False, num_epochs=5):
+def train_cnn(use_prelu=False, use_builtin_conv=False, num_epochs=5):
     """Train CNN using Hugging Face libraries."""
-    
-    # Initialize accelerator for distributed training
-    accelerator = Accelerator()
     
     # Load CIFAR-10 dataset from Hugging Face
     print("Loading CIFAR-10 dataset...")
@@ -256,29 +259,31 @@ def train_cnn_with_huggingface(use_prelu=False, use_builtin_conv=False, num_epoc
         preprocess_images,
         batched=True,
         batch_size=100,
-        remove_columns=dataset['train'].column_names
+        # remove_columns=dataset['train'].column_names
     )
     
     # Create model
     print(f"Creating CNN model (PReLU: {use_prelu}, Builtin conv: {use_builtin_conv})...")
-    model = ManualCNN(use_prelu=use_prelu, use_builtin_conv=use_builtin_conv)
+    model = CNN(use_prelu=use_prelu, use_builtin_conv=use_builtin_conv)
     
     # Training arguments
     training_args = TrainingArguments(
-        output_dir=f"./cnn_results_{'prelu' if use_prelu else 'relu'}",
+        output_dir=f"./results/cnn_results_{'prelu' if use_prelu else 'relu'}",
         num_train_epochs=num_epochs,
         per_device_train_batch_size=32,
         per_device_eval_batch_size=32,
         warmup_steps=500,
         weight_decay=0.01,
-        logging_dir=f"./logs_{'prelu' if use_prelu else 'relu'}",
-        logging_steps=100,
+        logging_dir=f"./logs/logs_{'prelu' if use_prelu else 'relu'}",
+        logging_steps=50,
         save_strategy="epoch",
+        save_total_limit=10,
+        save_steps=100,
         # load_best_model_at_end=True,
         # metric_for_best_model="accuracy",
         # greater_is_better=True,
-        dataloader_pin_memory=False,  # Disable for manual convolution
-        remove_unused_columns=False,  # Keep all columns - required for custom models
+        # dataloader_pin_memory=False,  # Disable for manual convolution
+        # remove_unused_columns=False,  # Keep all columns - required for custom models
     )
     
     # Initialize trainer
@@ -301,36 +306,8 @@ def train_cnn_with_huggingface(use_prelu=False, use_builtin_conv=False, num_epoc
     return trainer, results
 
 if __name__ == "__main__":
-    # Train with ReLU
-    print("=" * 50)
-    print("Training with ReLU activation...")
-    print("=" * 50)
-    relu_trainer, relu_results = train_cnn_with_huggingface(
+    relu_trainer, relu_results = train_cnn(
         use_prelu=False, 
         use_builtin_conv=False,
-        num_epochs=3
+        num_epochs=1
     )
-    
-    # Train with PReLU
-    print("\n" + "=" * 50)
-    print("Training with PReLU activation...")
-    print("=" * 50)
-    prelu_trainer, prelu_results = train_cnn_with_huggingface(
-        use_prelu=True, 
-        use_builtin_conv=False,
-        num_epochs=3
-    )
-    
-    # Compare results
-    print("\n" + "=" * 50)
-    print("COMPARISON RESULTS")
-    print("=" * 50)
-    print(f"ReLU Test Accuracy:  {relu_results['eval_accuracy']:.4f}")
-    print(f"PReLU Test Accuracy: {prelu_results['eval_accuracy']:.4f}")
-    
-    if relu_results['eval_accuracy'] > prelu_results['eval_accuracy']:
-        print("ReLU performed better!")
-    elif prelu_results['eval_accuracy'] > relu_results['eval_accuracy']:
-        print("PReLU performed better!")
-    else:
-        print("Both performed equally!")
