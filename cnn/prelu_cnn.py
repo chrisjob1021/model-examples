@@ -11,10 +11,15 @@ you can compare the impact of PReLU on accuracy.
 import torch
 from torch import nn
 import torch.nn.functional as F
-from torchvision import datasets, transforms
-
-# Device configuration
-DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+from torch.utils.data import DataLoader
+from datasets import load_dataset
+from transformers import (
+    Trainer, 
+    TrainingArguments
+)
+from accelerate import Accelerator
+import numpy as np
+from PIL import Image
 
 # -------------------------------------------------------
 # Manual 2D convolution layer implemented with nested loops
@@ -151,98 +156,175 @@ class ManualCNN(nn.Module):
 
     def __init__(self, use_prelu: bool = False, *, use_builtin_conv: bool = False):
         super().__init__()
-        # CIFAR10 has 3 input channels
-        self.conv1 = ManualConv2d(3, 8, kernel_size=3, padding=1, use_builtin=use_builtin_conv)
+        self.conv1 = ManualConv2d(3, 16, kernel_size=3, padding=1, use_builtin=use_builtin_conv)
         self.act1 = nn.PReLU() if use_prelu else nn.ReLU()
         self.pool1 = ManualMaxPool2d(kernel_size=2)
 
-        self.conv2 = ManualConv2d(8, 16, kernel_size=3, padding=1, use_builtin=use_builtin_conv)
+        self.conv2 = ManualConv2d(16, 32, kernel_size=3, padding=1, use_builtin=use_builtin_conv)
         self.act2 = nn.PReLU() if use_prelu else nn.ReLU()
         self.pool2 = ManualMaxPool2d(kernel_size=2)
 
-        # After two 2x2 poolings starting from 32x32 images -> 8x8 spatial size
-        self.fc = nn.Linear(16 * 8 * 8, 10)
+        self.conv3 = ManualConv2d(32, 64, kernel_size=3, padding=1, use_builtin=use_builtin_conv)
+        self.act3 = nn.PReLU() if use_prelu else nn.ReLU()
+        self.pool3 = ManualMaxPool2d(kernel_size=2)
+
+        # After three 2x2 poolings: 32x32 -> 16x16 -> 8x8 -> 4x4
+        self.fc = nn.Linear(64 * 4 * 4, 10)
+        self.dropout = nn.Dropout(0.5)
 
     def forward(self, x):
-        # Pass input through first conv block
         x = self.conv1(x)
         x = self.act1(x)
         x = self.pool1(x)
-        # Second conv block
+        
         x = self.conv2(x)
         x = self.act2(x)
         x = self.pool2(x)
-        # Flatten and apply final classification layer
+        
+        x = self.conv3(x)
+        x = self.act3(x)
+        x = self.pool3(x)
+        
         x = x.view(x.size(0), -1)
+        x = self.dropout(x)
         return self.fc(x)
 
 # -------------------------------------------------------
-# Training and evaluation helpers
+# Data preprocessing functions
 # -------------------------------------------------------
+def preprocess_images(examples):
+    """Preprocess images for the model."""
+    images = []
+    for image in examples['img']:
+        if isinstance(image, str):
+            # If image is a file path, load it
+            image = Image.open(image).convert('RGB')
+        elif isinstance(image, np.ndarray):
+            # If image is numpy array, convert to PIL
+            image = Image.fromarray(image)
+        
+        # Convert to tensor and normalize
+        image = torch.tensor(np.array(image), dtype=torch.float32)
+        image = image.permute(2, 0, 1) / 255.0  # HWC -> CHW and normalize to [0,1]
+        images.append(image)
+    
+    examples['pixel_values'] = images
+    return examples
 
-def train(model, loader, epochs: int = 1, lr: float = 0.01):
-    """Train for a few epochs using data from ``loader``."""
+# -------------------------------------------------------
+# Custom Trainer for CNN
+# -------------------------------------------------------
+class CNNTrainer(Trainer):
+    """Custom trainer for CNN models."""
+    
+    def compute_loss(self, model, inputs, return_outputs=False):
+        pixel_values = inputs['pixel_values']
+        labels = inputs['labels']
+        
+        # Stack pixel values into batch
+        pixel_values = torch.stack(pixel_values)
+        
+        outputs = model(pixel_values)
+        loss_fct = nn.CrossEntropyLoss()
+        loss = loss_fct(outputs, labels)
+        
+        return (loss, outputs) if return_outputs else loss
 
-    model.to(DEVICE)
-    optimizer = torch.optim.Adam(model.parameters(), lr=lr)
-    loss_fn = nn.CrossEntropyLoss()
-
-    model.train()
-    for epoch in range(epochs):
-        epoch_loss = 0.0
-        for images, labels in loader:
-            images, labels = images.to(DEVICE), labels.to(DEVICE)
-
-            optimizer.zero_grad()
-            logits = model(images)
-            loss = loss_fn(logits, labels)
-            loss.backward()
-            optimizer.step()
-
-            epoch_loss += loss.item() * images.size(0)
-
-        avg_loss = epoch_loss / len(loader.dataset)
-        print(f"epoch {epoch + 1} | loss {avg_loss:.4f}")
-
-@torch.no_grad()
-def evaluate(model, loader):
-    model.to(DEVICE)
-    model.eval()
-    correct = 0
-    total = 0
-    for images, labels in loader:
-        images, labels = images.to(DEVICE), labels.to(DEVICE)
-        logits = model(images)
-        preds = logits.argmax(dim=1)
-        correct += (preds == labels).sum().item()
-        total += labels.size(0)
-    return correct / total if total > 0 else 0.0
+# -------------------------------------------------------
+# Main training function
+# -------------------------------------------------------
+def train_cnn_with_huggingface(use_prelu=False, use_builtin_conv=False, num_epochs=5):
+    """Train CNN using Hugging Face libraries."""
+    
+    # Initialize accelerator for distributed training
+    accelerator = Accelerator()
+    
+    # Load CIFAR-10 dataset from Hugging Face
+    print("Loading CIFAR-10 dataset...")
+    dataset = load_dataset("cifar10")
+    
+    # Preprocess the dataset
+    print("Preprocessing dataset...")
+    processed_dataset = dataset.map(
+        preprocess_images,
+        batched=True,
+        batch_size=100,
+        remove_columns=dataset['train'].column_names
+    )
+    
+    # Create model
+    print(f"Creating CNN model (PReLU: {use_prelu}, Builtin conv: {use_builtin_conv})...")
+    model = ManualCNN(use_prelu=use_prelu, use_builtin_conv=use_builtin_conv)
+    
+    # Training arguments
+    training_args = TrainingArguments(
+        output_dir=f"./cnn_results_{'prelu' if use_prelu else 'relu'}",
+        num_train_epochs=num_epochs,
+        per_device_train_batch_size=32,
+        per_device_eval_batch_size=32,
+        warmup_steps=500,
+        weight_decay=0.01,
+        logging_dir=f"./logs_{'prelu' if use_prelu else 'relu'}",
+        logging_steps=100,
+        evaluation_strategy="epoch",
+        save_strategy="epoch",
+        load_best_model_at_end=True,
+        metric_for_best_model="accuracy",
+        greater_is_better=True,
+        dataloader_pin_memory=False,  # Disable for manual convolution
+    )
+    
+    # Initialize trainer
+    trainer = CNNTrainer(
+        model=model,
+        args=training_args,
+        train_dataset=processed_dataset['train'],
+        eval_dataset=processed_dataset['test'],
+        tokenizer=None,  # No tokenizer needed for vision tasks
+    )
+    
+    # Train the model
+    print("Starting training...")
+    trainer.train()
+    
+    # Evaluate the model
+    print("Evaluating model...")
+    results = trainer.evaluate()
+    
+    print(f"Final test accuracy: {results['eval_accuracy']:.4f}")
+    return trainer, results
 
 if __name__ == "__main__":
-    # Load CIFAR10 dataset (a few samples to keep the run light)
-    transform = transforms.ToTensor()
-    full_train = datasets.CIFAR10(root="data", train=True, download=True, transform=transform)
-    full_test = datasets.CIFAR10(root="data", train=False, download=True, transform=transform)
-
-    # Use subsets for a quick demonstration
-    train_subset = torch.utils.data.Subset(full_train, list(range(1000)))
-    test_subset = torch.utils.data.Subset(full_test, list(range(1000)))
-
-    train_loader = torch.utils.data.DataLoader(train_subset, batch_size=64, shuffle=True)
-    test_loader = torch.utils.data.DataLoader(test_subset, batch_size=64)
-
-    # Train and evaluate with ReLU
-    # Set ``use_builtin_conv=True`` to speed up training by using PyTorch's
-    # native convolution implementation inside our ``ManualConv2d`` layers.
+    # Train with ReLU
+    print("=" * 50)
     print("Training with ReLU activation...")
-    relu_model = ManualCNN(use_prelu=False, use_builtin_conv=False)
-    train(relu_model, train_loader, epochs=3)
-    relu_acc = evaluate(relu_model, test_loader)
-    print(f"Test accuracy with ReLU: {relu_acc:.2f}")
-
-    # Train and evaluate with PReLU
-    print("\nTraining with PReLU activation...")
-    prelu_model = ManualCNN(use_prelu=True, use_builtin_conv=False)
-    train(prelu_model, train_loader, epochs=3)
-    prelu_acc = evaluate(prelu_model, test_loader)
-    print(f"Test accuracy with PReLU: {prelu_acc:.2f}")
+    print("=" * 50)
+    relu_trainer, relu_results = train_cnn_with_huggingface(
+        use_prelu=False, 
+        use_builtin_conv=False,
+        num_epochs=3
+    )
+    
+    # Train with PReLU
+    print("\n" + "=" * 50)
+    print("Training with PReLU activation...")
+    print("=" * 50)
+    prelu_trainer, prelu_results = train_cnn_with_huggingface(
+        use_prelu=True, 
+        use_builtin_conv=False,
+        num_epochs=3
+    )
+    
+    # Compare results
+    print("\n" + "=" * 50)
+    print("COMPARISON RESULTS")
+    print("=" * 50)
+    print(f"ReLU Test Accuracy:  {relu_results['eval_accuracy']:.4f}")
+    print(f"PReLU Test Accuracy: {prelu_results['eval_accuracy']:.4f}")
+    
+    if relu_results['eval_accuracy'] > prelu_results['eval_accuracy']:
+        print("ReLU performed better!")
+    elif prelu_results['eval_accuracy'] > relu_results['eval_accuracy']:
+        print("PReLU performed better!")
+    else:
+        print("Both performed equally!")
