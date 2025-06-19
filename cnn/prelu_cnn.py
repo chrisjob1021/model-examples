@@ -209,6 +209,8 @@ def preprocess_images(examples):
         images.append(image)
     
     examples['pixel_values'] = images
+    # CIFAR-10 uses 'label' column, not 'labels'
+    examples['labels'] = examples['label']
     return examples
 
 # -------------------------------------------------------
@@ -217,18 +219,23 @@ def preprocess_images(examples):
 class CNNTrainer(Trainer):
     """Custom trainer for CNN models."""
     
-    def compute_loss(self, model, inputs, return_outputs=False):
+    def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
         pixel_values = inputs['pixel_values']
         labels = inputs['labels']
         
-        # Stack pixel values into batch
-        pixel_values = torch.stack(pixel_values)
-        
+        # pixel_values is already a tensor, no need to stack
         outputs = model(pixel_values)
         loss_fct = nn.CrossEntropyLoss()
         loss = loss_fct(outputs, labels)
         
         return (loss, outputs) if return_outputs else loss
+    
+    def compute_metrics(self, eval_pred):
+        """Compute accuracy for evaluation."""
+        predictions, labels = eval_pred
+        predictions = np.argmax(predictions, axis=1)
+        accuracy = (predictions == labels).astype(np.float32).mean().item()
+        return {"accuracy": accuracy}
 
 # -------------------------------------------------------
 # Main training function
@@ -266,12 +273,12 @@ def train_cnn_with_huggingface(use_prelu=False, use_builtin_conv=False, num_epoc
         weight_decay=0.01,
         logging_dir=f"./logs_{'prelu' if use_prelu else 'relu'}",
         logging_steps=100,
-        evaluation_strategy="epoch",
         save_strategy="epoch",
-        load_best_model_at_end=True,
-        metric_for_best_model="accuracy",
-        greater_is_better=True,
+        # load_best_model_at_end=True,
+        # metric_for_best_model="accuracy",
+        # greater_is_better=True,
         dataloader_pin_memory=False,  # Disable for manual convolution
+        remove_unused_columns=False,  # Keep all columns - required for custom models
     )
     
     # Initialize trainer
@@ -280,7 +287,6 @@ def train_cnn_with_huggingface(use_prelu=False, use_builtin_conv=False, num_epoc
         args=training_args,
         train_dataset=processed_dataset['train'],
         eval_dataset=processed_dataset['test'],
-        tokenizer=None,  # No tokenizer needed for vision tasks
     )
     
     # Train the model
