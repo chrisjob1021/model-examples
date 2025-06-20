@@ -58,7 +58,7 @@ class ManualConv2d(nn.Module):
                 padding=self.padding,
             )
 
-        batch_size, in_channels, in_height, in_width = x.shape
+        batch_size, _, in_height, in_width = x.shape
         kernel_height = kernel_width = self.weight.shape[2]
 
         # Pad the input so that the manually computed convolution matches PyTorch's behavior
