@@ -229,7 +229,6 @@ class CNNTrainer(Trainer):
         pixel_values = inputs['pixel_values']
         labels = inputs['labels']
         
-        # pixel_values is already a tensor, no need to stack
         outputs = model(pixel_values)
         loss_fct = nn.CrossEntropyLoss()
         loss = loss_fct(outputs, labels)
