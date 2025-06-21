@@ -37,6 +37,10 @@ class ManualConv2d(nn.Module):
     def __init__(self, in_channels, out_channels, kernel_size, stride=1, padding=0, *, use_builtin=False):
         super().__init__()
         # Kernel weights and biases follow the shape used by nn.Conv2d
+        # nn.Parameter wraps tensors to make them trainable parameters that will be
+        # automatically tracked by PyTorch's autograd system for gradient computation
+        # during backpropagation. Without nn.Parameter, these tensors would not be
+        # updated during training.
         self.weight = nn.Parameter(
             torch.randn(out_channels, in_channels, kernel_size, kernel_size) * 0.1
         )
@@ -62,13 +66,16 @@ class ManualConv2d(nn.Module):
         kernel_height = kernel_width = self.weight.shape[2]
 
         # Pad the input so that the manually computed convolution matches PyTorch's behavior
+        # F.pad takes padding as (left, right, top, bottom)
+        # This adds self.padding pixels to all sides of the input
+        # For 3D tensors (batch, channels, height, width), padding is applied to the last 2 dimensions
         padded_x = F.pad(
             x,
             (self.padding, self.padding, self.padding, self.padding),
         )
 
         # Compute output spatial dimensions using the convolution formula
-        out_height = (in_height + 2 * self.padding - kernel_height) // self.stride + 1
+        out_height = (in_height + 2 * self.padding - kernel_height) // self.stride + 1 # add 1 because there's one initial position
         out_width = (in_width + 2 * self.padding - kernel_width) // self.stride + 1
 
         # Allocate output tensor on the same device as the input
@@ -82,7 +89,7 @@ class ManualConv2d(nn.Module):
                 for row in range(out_height):
                     for col in range(out_width):
                         # 1) select the patch from the padded image
-                        row_start = row * self.stride
+                        row_start = row * self.stride # range indexes from 0, so this will be 0 and first position is going to be top left
                         col_start = col * self.stride
                         region = padded_x[
                             batch_idx,
@@ -93,6 +100,8 @@ class ManualConv2d(nn.Module):
 
                         # 2) element-wise multiply patch and kernel, 3) sum and add bias
                         output[batch_idx, out_ch, row, col] = (
+                            # self.weight[out_ch] returns shape (in_channels, kernel_height, kernel_width)
+                            # This represents the kernel weights for the current output channel
                             region * self.weight[out_ch]
                         ).sum() + self.bias[out_ch]
 
