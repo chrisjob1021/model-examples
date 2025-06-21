@@ -235,89 +235,20 @@ def preprocess_images(examples):
 # -------------------------------------------------------
 class CNNTrainer(Trainer):
     """Custom trainer for CNN models."""
-    
-    def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
-        pixel_values = inputs['pixel_values']
-        labels = inputs['labels']
-        
+
+    def compute_loss(self, model, inputs, return_outputs=False):
+        pixel_values = inputs["pixel_values"]
+        labels = inputs["labels"]
+
         outputs = model(pixel_values)
         loss_fct = nn.CrossEntropyLoss()
         loss = loss_fct(outputs, labels)
-        
+
         return (loss, outputs) if return_outputs else loss
-    
+
     def compute_metrics(self, eval_pred):
         """Compute accuracy for evaluation."""
         predictions, labels = eval_pred
         predictions = np.argmax(predictions, axis=1)
         accuracy = (predictions == labels).astype(np.float32).mean().item()
         return {"accuracy": accuracy}
-
-# -------------------------------------------------------
-# Main training function
-# -------------------------------------------------------
-def train_cnn(use_prelu=False, use_builtin_conv=False, num_epochs=5):
-    """Train CNN using Hugging Face libraries."""
-    
-    # Load CIFAR-10 dataset from Hugging Face
-    print("Loading CIFAR-10 dataset...")
-    dataset = load_dataset("cifar10")
-    
-    # Preprocess the dataset
-    print("Preprocessing dataset...")
-    processed_dataset = dataset.map(
-        preprocess_images,
-        batched=True,
-        batch_size=100,
-        # remove_columns=dataset['train'].column_names
-    )
-    
-    # Create model
-    print(f"Creating CNN model (PReLU: {use_prelu}, Builtin conv: {use_builtin_conv})...")
-    model = CNN(use_prelu=use_prelu, use_builtin_conv=use_builtin_conv)
-    
-    # Training arguments
-    training_args = TrainingArguments(
-        output_dir=f"./results/cnn_results_{'prelu' if use_prelu else 'relu'}",
-        num_train_epochs=num_epochs,
-        per_device_train_batch_size=32,
-        per_device_eval_batch_size=32,
-        warmup_steps=500,
-        weight_decay=0.01,
-        logging_dir=f"./logs/logs_{'prelu' if use_prelu else 'relu'}",
-        logging_steps=50,
-        save_strategy="epoch",
-        save_total_limit=10,
-        save_steps=100,
-        # load_best_model_at_end=True,
-        # metric_for_best_model="accuracy",
-        # greater_is_better=True,
-        # dataloader_pin_memory=False,  # Disable for manual convolution
-        # remove_unused_columns=False,  # Keep all columns - required for custom models
-    )
-    
-    # Initialize trainer
-    trainer = CNNTrainer(
-        model=model,
-        args=training_args,
-        train_dataset=processed_dataset['train'],
-        eval_dataset=processed_dataset['test'],
-    )
-    
-    # Train the model
-    print("Starting training...")
-    trainer.train()
-    
-    # Evaluate the model
-    print("Evaluating model...")
-    results = trainer.evaluate()
-    
-    print(f"Final test accuracy: {results['eval_accuracy']:.4f}")
-    return trainer, results
-
-if __name__ == "__main__":
-    relu_trainer, relu_results = train_cnn(
-        use_prelu=False, 
-        use_builtin_conv=False,
-        num_epochs=1
-    )
