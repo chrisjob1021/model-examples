@@ -39,15 +39,18 @@ def main(use_prelu, use_builtin_conv, num_epochs):
 
     trainer.run()
 
-
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Train a CNN on CIFAR-10.")
     parser.add_argument(
-        "--use_prelu", action="store_true", help="Use PReLU activation instead of ReLU."
+        "--use_prelu",
+        action="store_true",
+        default=False,
+        help="Use PReLU activation instead of ReLU.",
     )
     parser.add_argument(
         "--use_builtin_conv",
         action="store_true",
+        default=True,
         help="Use built-in torch.nn.functional.conv2d.",
     )
     parser.add_argument(
