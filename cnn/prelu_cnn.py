@@ -166,6 +166,8 @@ class CNN(nn.Module):
         super().__init__()
         self.conv1 = ManualConv2d(3, 16, kernel_size=3, padding=1, use_builtin=use_builtin_conv)
         self.act1 = nn.PReLU() if use_prelu else nn.ReLU()
+        # ManualMaxPool2d with kernel_size=2 reduces spatial dimensions by half
+        # Input: (batch, channels, height, width) -> Output: (batch, channels, height//2, width//2)
         self.pool1 = ManualMaxPool2d(kernel_size=2)
 
         self.conv2 = ManualConv2d(16, 32, kernel_size=3, padding=1, use_builtin=use_builtin_conv)
