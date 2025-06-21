@@ -179,7 +179,12 @@ class CNN(nn.Module):
         self.pool3 = ManualMaxPool2d(kernel_size=2)
 
         # After three 2x2 poolings: 32x32 -> 16x16 -> 8x8 -> 4x4
+        # 64: number of output channels from conv3
+        # 4 * 4: spatial dimensions after 3 pooling layers (32->16->8->4)
+        # 10: number of CIFAR-10 classes
         self.fc = nn.Linear(64 * 4 * 4, 10)
+        # Dropout randomly sets 50% of inputs to zero during training to prevent overfitting
+        # This forces the network to learn redundant representations and improves generalization
         self.dropout = nn.Dropout(0.5)
 
     def forward(self, x):
@@ -195,6 +200,10 @@ class CNN(nn.Module):
         x = self.act3(x)
         x = self.pool3(x)
         
+        # Reshape the tensor from 4D (batch, channels, height, width) to 2D (batch, features)
+        # x.size(0) keeps the batch dimension unchanged
+        # -1 automatically calculates the flattened feature dimension (channels * height * width)
+        # This flattens the spatial dimensions and channels into a single feature vector per sample
         x = x.view(x.size(0), -1)
         x = self.dropout(x)
         return self.fc(x)
@@ -241,14 +250,19 @@ class CNNTrainer(Trainer):
         labels = inputs["labels"]
 
         outputs = model(pixel_values)
-        loss_fct = nn.CrossEntropyLoss()
-        loss = loss_fct(outputs, labels)
+        loss_fn = nn.CrossEntropyLoss()
+        loss = loss_fn(outputs, labels)
 
         return (loss, outputs) if return_outputs else loss
 
     def compute_metrics(self, eval_pred):
         """Compute accuracy for evaluation."""
+        # eval_pred is a tuple containing (predictions, labels) from the model evaluation
+        # predictions: numpy array of shape (num_samples, num_classes) with raw logits
+        # labels: numpy array of shape (num_samples,) with true class labels
         predictions, labels = eval_pred
+        # axis=1 selects the class dimension (columns) to find the maximum probability
+        # predictions shape: (num_samples, num_classes) -> argmax along axis=1 gives class indices
         predictions = np.argmax(predictions, axis=1)
         accuracy = (predictions == labels).astype(np.float32).mean().item()
         return {"accuracy": accuracy}
