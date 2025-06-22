@@ -12,13 +12,14 @@ import torch
 from torch import nn
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
-from datasets import load_dataset
 from transformers import (
     Trainer, 
     TrainingArguments
 )
 import numpy as np
 from PIL import Image
+import math
+
 
 # -------------------------------------------------------
 # Manual 2D convolution layer implemented with nested loops
@@ -113,13 +114,17 @@ class ManualConv2d(nn.Module):
 class ManualMaxPool2d(nn.Module):
     """Max pooling using explicit loops (square kernels only)."""
 
-    def __init__(self, kernel_size, stride=None):
+    def __init__(self, kernel_size, stride=None, use_builtin=False):
         super().__init__()
         self.kernel_size = kernel_size
         # Default stride equals kernel size as in typical max pooling layers
         self.stride = stride or kernel_size
+        self.use_builtin = use_builtin
 
     def forward(self, x):
+        if self.use_builtin:
+            return F.max_pool2d(x, self.kernel_size, self.stride)
+        
         # x shape: (batch, channels, height, width)
         batch_size, channels, in_height, in_width = x.shape
         k = self.kernel_size
@@ -144,6 +149,73 @@ class ManualMaxPool2d(nn.Module):
                         ]
                         # Compute max inside the window and store the result
                         output[batch_idx, channel, row, col] = region.max()
+
+        return output
+
+# -------------------------------------------------------
+# Manual adaptive average pooling layer
+# -------------------------------------------------------
+class ManualAdaptiveAvgPool2d(nn.Module):
+    """Adaptive average pooling using explicit loops."""
+
+    def __init__(self, output_size, use_builtin=False, debug=False):
+        super().__init__()
+        self.output_size = output_size
+        self.use_builtin = use_builtin
+        self.debug = debug
+
+    def forward(self, x, debug=False):
+        if self.use_builtin:
+            return F.adaptive_avg_pool2d(x, self.output_size)
+
+        # x shape: (batch, channels, height, width)
+        batch_size, channels, in_height, in_width = x.shape
+        out_height, out_width = self.output_size
+
+        # Allocate output tensor
+        output = torch.zeros(
+            batch_size, channels, out_height, out_width, device=x.device
+        )
+
+        if self.debug:
+            print(f"\nAdaptive Average Pooling Debug:")
+            print(f"Input: {batch_size} batches × {channels} channels × {in_height}×{in_width} spatial")
+            print(f"Output: {out_height}×{out_width} spatial")
+            print(f"\n{'Cell':<8} {'Row Start':<10} {'Row End':<8} {'Col Start':<10} {'Col End':<8} {'Region':<15}")
+            print("-" * 70)
+
+        for i in range(out_height):
+            for j in range(out_width):
+                row_start = math.floor(i * in_height / out_height)
+                row_end = math.ceil((i + 1) * in_height / out_height)
+                col_start = math.floor(j * in_width / out_width)
+                col_end = math.ceil((j + 1) * in_width / out_width)
+
+                region = x[:, :, row_start:row_end, col_start:col_end]
+                region_avg = region.mean(dim=(2, 3))
+                output[:, :, i, j] = region_avg
+
+                if self.debug:
+                    region_desc = f"[{row_start}:{row_end}, {col_start}:{col_end}]"
+                    print(f"({i},{j}){'':<2} {row_start:<10} {row_end:<8} {col_start:<10} {col_end:<8} {region_desc:<15}")
+                    
+                    # Show the math for the first batch and channel
+                    if batch_size > 0 and channels > 0:
+                        region_2d = x[0, 0, row_start:row_end, col_start:col_end]
+                        region_shape = f"{row_end-row_start}×{col_end-col_start}"
+                        region_sum = region_2d.sum().item()
+                        region_count = region_2d.numel()
+                        avg_result = region_avg[0, 0].item()
+                        
+                        # Format region values for display
+                        region_values = region_2d.flatten().tolist()
+                        region_str = ', '.join([f"{val:.1f}" for val in region_values])
+                        
+                        print(f"    Math: {region_shape} region = [{region_str}]")
+                        print(f"    Sum: {region_sum:.1f}, Count: {region_count}, Average: {region_sum:.1f}/{region_count} = {avg_result:.1f}")
+
+        if self.debug:
+            print("-" * 70)
 
         return output
 
