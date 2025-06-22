@@ -20,6 +20,14 @@ import numpy as np
 from PIL import Image
 import math
 
+class ConvAct(nn.Module):
+    def __init__(self, in_channels, out_channels, use_prelu, use_builtin_conv):
+        super().__init__()
+        self.conv = ManualConv2d(in_channels, out_channels, kernel_size=3, padding=1, use_builtin=use_builtin_conv)
+        self.act = nn.PReLU() if use_prelu else nn.ReLU()
+
+    def forward(self, x):
+        return self.act(self.conv(x))
 
 # -------------------------------------------------------
 # Manual 2D convolution layer implemented with nested loops
@@ -43,9 +51,16 @@ class ManualConv2d(nn.Module):
         # during backpropagation. Without nn.Parameter, these tensors would not be
         # updated during training.
         self.weight = nn.Parameter(
-            torch.randn(out_channels, in_channels, kernel_size, kernel_size) * 0.1
+            torch.empty(out_channels, in_channels, kernel_size, kernel_size)
         )
         self.bias = nn.Parameter(torch.zeros(out_channels))
+        
+        # Initialize weights using Kaiming initialization
+        # This is specifically designed for ReLU-like activations and helps with gradient flow
+        # 'fan_in' mode preserves the magnitude of variance in the forward pass
+        # 'relu' nonlinearity accounts for the fact that ReLU zeros out half the values
+        nn.init.kaiming_normal_(self.weight, mode='fan_in', nonlinearity='relu')
+        
         self.stride = stride
         self.padding = padding
         self.use_builtin = use_builtin
@@ -236,49 +251,68 @@ class CNN(nn.Module):
 
     def __init__(self, use_prelu: bool = False, *, use_builtin_conv: bool = False):
         super().__init__()
-        self.conv1 = ManualConv2d(3, 16, kernel_size=3, padding=1, use_builtin=use_builtin_conv)
-        self.act1 = nn.PReLU() if use_prelu else nn.ReLU()
-        # ManualMaxPool2d with kernel_size=2 reduces spatial dimensions by half
-        # Input: (batch, channels, height, width) -> Output: (batch, channels, height//2, width//2)
-        self.pool1 = ManualMaxPool2d(kernel_size=2)
+        
+        # 3 × (64-ch) conv stack, 2×2 max pool
+        self.stage1 = nn.Sequential(
+            *[ConvAct(  3 if i == 0 else 64, 64, use_prelu, use_builtin_conv) for i in range(3)],
+            nn.MaxPool2d(kernel_size=2)   # 32→16: Reduces spatial dimensions by half, from 32x32 (original CIFAR10 input size) to 16x16
+        )
 
-        self.conv2 = ManualConv2d(16, 32, kernel_size=3, padding=1, use_builtin=use_builtin_conv)
-        self.act2 = nn.PReLU() if use_prelu else nn.ReLU()
-        self.pool2 = ManualMaxPool2d(kernel_size=2)
+        # 3 × (128-ch) conv stack
+        self.stage2 = nn.Sequential(
+            *[ConvAct(  64 if i == 0 else 128, 128, use_prelu, use_builtin_conv) for i in range(3)],
+            nn.MaxPool2d(kernel_size=2)   # 16→8: Reduces spatial dimensions by half, from 16x16 to 8x8
+        )
 
-        self.conv3 = ManualConv2d(32, 64, kernel_size=3, padding=1, use_builtin=use_builtin_conv)
-        self.act3 = nn.PReLU() if use_prelu else nn.ReLU()
-        self.pool3 = ManualMaxPool2d(kernel_size=2)
+        # 3 × (256-ch) conv stack
+        self.stage3 = nn.Sequential(
+            *[ConvAct(  128 if i == 0 else 256, 256, use_prelu, use_builtin_conv) for i in range(6)],
+            nn.MaxPool2d(kernel_size=2)   # 8→4: Reduces spatial dimensions by half, from 8x8 to 4x4
+        )
 
-        # After three 2x2 poolings: 32x32 -> 16x16 -> 8x8 -> 4x4
-        # 64: number of output channels from conv3
-        # 4 * 4: spatial dimensions after 3 pooling layers (32->16->8->4)
-        # 10: number of CIFAR-10 classes
-        self.fc = nn.Linear(64 * 4 * 4, 10)
-        # Dropout randomly sets 50% of inputs to zero during training to prevent overfitting
-        # This forces the network to learn redundant representations and improves generalization
-        self.dropout = nn.Dropout(0.5)
-
+        self.classifier = nn.Sequential(
+            # Step 1: Global Average Pooling - Reduces spatial dimensions from 4×4 to 1×1
+            # This converts the 4×4×256 feature maps to 1×1, effectively averaging each channel
+            nn.AdaptiveAvgPool2d(1),          # 4×4 → 1×1
+            
+            # Step 2: Flatten - Converts 3D tensor (batch, channels, 1, 1) to 2D tensor (batch, channels)
+            # This removes the spatial dimensions, leaving only batch and feature dimensions
+            nn.Flatten(),
+            
+            # Step 3: First Dropout - Randomly sets 50% of inputs to zero during training
+            # This helps prevent overfitting by forcing the network to not rely on specific neurons
+            nn.Dropout(0.5),
+            
+            # Step 4: First Linear Layer - Expands from 256 features to 4096 features
+            # This creates a large hidden layer for learning complex representations
+            nn.Linear(256, 4096),
+            
+            # Step 5: First Activation - Applies PReLU or ReLU based on use_prelu parameter
+            # PReLU learns the negative slope parameter, while ReLU uses fixed slope of 0
+            nn.PReLU(4096) if use_prelu else nn.ReLU(inplace=True),
+            
+            # Step 6: Second Dropout - Another 50% dropout for additional regularization
+            # Multiple dropout layers help prevent co-adaptation of neurons
+            nn.Dropout(0.5),
+            
+            # Step 7: Second Linear Layer - Maps from 4096 to 4096 features
+            # This creates another large hidden layer for further feature learning
+            nn.Linear(4096, 4096),
+            
+            # Step 8: Second Activation
+            # Provides non-linearity after the second linear transformation
+            nn.PReLU(4096) if use_prelu else nn.ReLU(inplace=True),
+            
+            # Step 9: Final Linear Layer - Maps from 4096 features to 10 classes (CIFAR10)
+            # This is the output layer that produces logits for each of the 10 classes
+            nn.Linear(4096, 10)
+        )
+        
     def forward(self, x):
-        x = self.conv1(x)
-        x = self.act1(x)
-        x = self.pool1(x)
-        
-        x = self.conv2(x)
-        x = self.act2(x)
-        x = self.pool2(x)
-        
-        x = self.conv3(x)
-        x = self.act3(x)
-        x = self.pool3(x)
-        
-        # Reshape the tensor from 4D (batch, channels, height, width) to 2D (batch, features)
-        # x.size(0) keeps the batch dimension unchanged
-        # -1 automatically calculates the flattened feature dimension (channels * height * width)
-        # This flattens the spatial dimensions and channels into a single feature vector per sample
-        x = x.view(x.size(0), -1)
-        x = self.dropout(x)
-        return self.fc(x)
+        x = self.stage1(x)
+        x = self.stage2(x)
+        x = self.stage3(x)
+        return self.classifier(x)
 
 # -------------------------------------------------------
 # Data preprocessing functions
