@@ -234,6 +234,30 @@ class ManualAdaptiveAvgPool2d(nn.Module):
 
         return output
 
+class SpatialPyramidPooling(nn.Module):
+    """Spatial Pyramid Pooling layer that pools at multiple scales."""
+    
+    def __init__(self, levels=[1, 2, 4]):
+        super().__init__()
+        self.levels = levels
+    
+    def forward(self, x):
+        pyramid_features = []
+            
+        for level in self.levels:
+            # F.adaptive_avg_pool2d(x, (level, level)) produces shape: (batch, channels, level, level)
+            pooled = F.adaptive_avg_pool2d(x, (level, level))
+            # flatten(2) keeps dims 0,1 and flattens the rest, so shape becomes: (batch, channels, level*level)
+            pyramid_features.append(pooled.flatten(2))
+
+        # Before cat: pyramid_features contains tensors of shapes:
+        # - level 1: (batch, channels, 1) 
+        # - level 2: (batch, channels, 4)
+        # - level 4: (batch, channels, 16)
+        # torch.cat(pyramid_features, dim=2) concatenates along the flattened spatial dimension
+        # Final shape: (batch, channels, 1+4+16=21)
+        return torch.cat(pyramid_features, dim=2)
+
 # -------------------------------------------------------
 # Simple CNN using the manual layers
 # -------------------------------------------------------
