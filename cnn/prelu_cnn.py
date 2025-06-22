@@ -136,16 +136,23 @@ class ManualConv2d(nn.Module):
 class ManualMaxPool2d(nn.Module):
     """Max pooling using explicit loops (square kernels only)."""
 
-    def __init__(self, kernel_size, stride=None, use_builtin=False):
+    def __init__(self, kernel_size, stride=None, use_builtin=False, padding=0):
         super().__init__()
         self.kernel_size = kernel_size
         # Default stride equals kernel size as in typical max pooling layers
         self.stride = stride or kernel_size
         self.use_builtin = use_builtin
+        self.padding = padding
 
     def forward(self, x):
         if self.use_builtin:
-            return F.max_pool2d(x, self.kernel_size, self.stride)
+            return F.max_pool2d(x, self.kernel_size, self.stride, self.padding)
+        
+        # Add padding to input if specified
+        if self.padding > 0:
+            # For max pooling, padding is typically done with -inf or very negative values
+            # so they don't interfere with the max operation
+            x = F.pad(x, (self.padding,) * 4, value=float('-inf'))
         
         # x shape: (batch, channels, height, width)
         batch_size, channels, in_height, in_width = x.shape
@@ -311,7 +318,7 @@ class CNN(nn.Module):
         # Levels {6,3,2,1} create 6²+3²+2²+1² = 36+9+4+1 = 50 bins per channel
         self.spp = nn.Sequential(
             SpatialPyramidPooling(levels=[6, 3, 2, 1]),
-            nn.Flatten(2),
+            nn.Flatten(1),
         )
         
         self.classifier = nn.Sequential(
