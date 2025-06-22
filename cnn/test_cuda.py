@@ -140,6 +140,40 @@ def test_manual_layers():
     
     print(f"✅ Manual layers test completed successfully!")
 
+def test_warnings():
+    """Test that warnings are shown when manual implementations are used."""
+    
+    print(f"\n" + "="*50)
+    print("Testing Warning Messages for Manual Implementations")
+    print("="*50)
+    
+    import warnings
+    from prelu_cnn import CNN, ManualConv2d, ManualMaxPool2d, ManualAdaptiveAvgPool2d
+    
+    # Capture warnings
+    with warnings.catch_warnings(record=True) as w:
+        warnings.simplefilter("always")
+        
+        print("Creating CNN with manual convolutions (use_builtin_conv=False)...")
+        model_manual = CNN(use_prelu=False, use_builtin_conv=False, num_classes=10)
+        
+        print("Creating ManualConv2d with manual implementation...")
+        conv_manual = ManualConv2d(3, 64, kernel_size=3, use_builtin=False)
+        
+        print("Creating ManualMaxPool2d with manual implementation...")
+        pool_manual = ManualMaxPool2d(kernel_size=2, use_builtin=False)
+        
+        print("Creating ManualAdaptiveAvgPool2d with manual implementation...")
+        adaptive_pool_manual = ManualAdaptiveAvgPool2d((1, 1), use_builtin=False)
+        
+        # Print all warnings
+        print(f"\nWarnings captured ({len(w)} total):")
+        for warning in w:
+            print(f"  ⚠️  {warning.category.__name__}: {warning.message}")
+    
+    print(f"\n✅ Warning test completed successfully!")
+
 if __name__ == "__main__":
     test_device_placement()
-    test_manual_layers() 
+    test_manual_layers()
+    test_warnings() 

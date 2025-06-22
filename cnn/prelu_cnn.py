@@ -19,6 +19,7 @@ from transformers import (
 import numpy as np
 from PIL import Image
 import math
+import warnings
 
 class ConvAct(nn.Module):
     def __init__(self, in_channels, out_channels, kernel_size, stride=1, padding=0, use_prelu=False, use_builtin_conv=False, prelu_channel_wise=True):
@@ -71,6 +72,15 @@ class ManualConv2d(nn.Module):
         self.stride = stride
         self.padding = padding
         self.use_builtin = use_builtin
+        
+        # Warn if using slow manual implementation
+        if not use_builtin:
+            warnings.warn(
+                "ManualConv2d is using slow manual loop implementation. "
+                "Set use_builtin=True for faster PyTorch F.conv2d implementation.",
+                UserWarning,
+                stacklevel=2
+            )
 
     def forward(self, x):
         # x: (batch, in_channels, height, width)
@@ -143,6 +153,15 @@ class ManualMaxPool2d(nn.Module):
         self.stride = stride or kernel_size
         self.use_builtin = use_builtin
         self.padding = padding
+        
+        # Warn if using slow manual implementation
+        if not use_builtin:
+            warnings.warn(
+                "ManualMaxPool2d is using slow manual loop implementation. "
+                "Set use_builtin=True for faster PyTorch F.max_pool2d implementation.",
+                UserWarning,
+                stacklevel=2
+            )
 
     def forward(self, x):
         if self.use_builtin:
@@ -191,6 +210,15 @@ class ManualAdaptiveAvgPool2d(nn.Module):
         self.output_size = output_size
         self.use_builtin = use_builtin
         self.debug = debug
+        
+        # Warn if using slow manual implementation
+        if not use_builtin:
+            warnings.warn(
+                "ManualAdaptiveAvgPool2d is using slow manual loop implementation. "
+                "Set use_builtin=True for faster PyTorch F.adaptive_avg_pool2d implementation.",
+                UserWarning,
+                stacklevel=2
+            )
 
     def forward(self, x, debug=False):
         if self.use_builtin:
@@ -297,16 +325,25 @@ class CNN(nn.Module):
         super().__init__()
         self.num_classes = num_classes
         
+        # Warn if using slow manual convolutions
+        if not use_builtin_conv:
+            warnings.warn(
+                "CNN is using slow manual convolution implementations. "
+                "Set use_builtin_conv=True for faster training with PyTorch's built-in convolutions.",
+                UserWarning,
+                stacklevel=2
+            )
+        
         # Layer 1: 7×7 conv, 64 filters, stride=2 (ImageNet input: 224×224)
         self.conv1 = nn.Sequential(
             ConvAct(3, 64, kernel_size=7, stride=2, padding=3, use_prelu=use_prelu, use_builtin_conv=use_builtin_conv, prelu_channel_wise=prelu_channel_wise),  # 224×224 → 112×112
-            ManualMaxPool2d(kernel_size=3, stride=3, padding=0)  # 112×112 → 37×37
+            ManualMaxPool2d(kernel_size=3, stride=3, padding=0, use_builtin=use_builtin_conv)  # 112×112 → 37×37
         )
         
         # conv2_x: 4 layers of 2×2, 128 filters
         self.conv2 = nn.Sequential(
             *[ConvAct(64 if i == 0 else 128, 128, kernel_size=2, stride=1, padding=0, use_prelu=use_prelu, use_builtin_conv=use_builtin_conv, prelu_channel_wise=prelu_channel_wise) for i in range(4)],  # 37×37 → 36×36 → 35×35 → 34×34 → 33×33
-            ManualMaxPool2d(kernel_size=2, stride=2)  # 33×33 → 16×16
+            ManualMaxPool2d(kernel_size=2, stride=2, use_builtin=use_builtin_conv)  # 33×33 → 16×16
         )
         
         # conv3_x: 6 layers of 2×2, 256 filters  
