@@ -1,8 +1,8 @@
-"""Minimal CNN training example using CIFAR10
+"""Minimal CNN training example using ImageNet
 
 Convolution and pooling are implemented manually with explicit loops instead of
 relying on ``torch.nn.functional`` helpers such as ``conv2d`` or ``max_pool2d``.
-This file trains the network on CIFAR10 with either ReLU or PReLU activation so
+This file trains the network on ImageNet with either ReLU or PReLU activation so
 you can compare the impact of PReLU on accuracy.
 """
 
@@ -21,10 +21,17 @@ from PIL import Image
 import math
 
 class ConvAct(nn.Module):
-    def __init__(self, in_channels, out_channels, use_prelu, use_builtin_conv):
+    def __init__(self, in_channels, out_channels, kernel_size, stride=1, padding=0, use_prelu=False, use_builtin_conv=False, prelu_channel_wise=True):
         super().__init__()
-        self.conv = ManualConv2d(in_channels, out_channels, kernel_size=3, padding=1, use_builtin=use_builtin_conv)
-        self.act = nn.PReLU() if use_prelu else nn.ReLU()
+        self.conv = ManualConv2d(in_channels, out_channels, kernel_size=kernel_size, stride=stride, padding=padding, use_builtin=use_builtin_conv)
+        
+        # Create appropriate activation function
+        if use_prelu:
+            # Channel-wise: one parameter per output channel
+            # Channel-shared: one parameter for all channels
+            self.act = nn.PReLU(out_channels if prelu_channel_wise else 1)
+        else:
+            self.act = nn.ReLU(inplace=True)
 
     def forward(self, x):
         return self.act(self.conv(x))
@@ -142,9 +149,8 @@ class ManualMaxPool2d(nn.Module):
         
         # x shape: (batch, channels, height, width)
         batch_size, channels, in_height, in_width = x.shape
-        k = self.kernel_size
-        out_height = (in_height - k) // self.stride + 1
-        out_width = (in_width - k) // self.stride + 1
+        out_height = (in_height - self.kernel_size) // self.stride + 1
+        out_width = (in_width - self.kernel_size) // self.stride + 1
 
         # Allocate output tensor
         output = torch.zeros(batch_size, channels, out_height, out_width, device=x.device)
@@ -159,8 +165,8 @@ class ManualMaxPool2d(nn.Module):
                         region = x[
                             batch_idx,
                             channel,
-                            row_start : row_start + k,
-                            col_start : col_start + k,
+                            row_start : row_start + self.kernel_size,
+                            col_start : col_start + self.kernel_size,
                         ]
                         # Compute max inside the window and store the result
                         output[batch_idx, channel, row, col] = region.max()
@@ -262,8 +268,11 @@ class SpatialPyramidPooling(nn.Module):
 # Simple CNN using the manual layers
 # -------------------------------------------------------
 class CNN(nn.Module):
-    """Very small CNN constructed from the manual layers above.
-
+    """CNN architecture based on the PReLU paper for ImageNet classification.
+    
+    This implements the exact architecture from "Delving Deep into Rectifiers" 
+    by He et al. (2015) to recreate their ImageNet experimental results.
+    
     Parameters
     ----------
     use_prelu : bool, optional
@@ -271,80 +280,76 @@ class CNN(nn.Module):
     use_builtin_conv : bool, optional
         Forward ``True`` to use the faster PyTorch convolution implementation
         inside :class:`ManualConv2d`. Defaults to ``False``.
+    prelu_channel_wise : bool, optional
+        If ``True``, use channel-wise PReLU (one parameter per channel).
+        If ``False``, use channel-shared PReLU (one parameter per layer).
+        Only used when use_prelu=True. Defaults to ``True``.
     """
 
-    def __init__(self, use_prelu: bool = False, *, use_builtin_conv: bool = False):
+    def __init__(self, use_prelu: bool = False, *, use_builtin_conv: bool = True, prelu_channel_wise: bool = True, num_classes: int = 1000): 
         super().__init__()
+        self.num_classes = num_classes
         
-        # 3 × (64-ch) conv stack, 2×2 max pool
-        self.stage1 = nn.Sequential(
-            *[ConvAct(  3 if i == 0 else 64, 64, use_prelu, use_builtin_conv) for i in range(3)],
-            nn.MaxPool2d(kernel_size=2)   # 32→16: Reduces spatial dimensions by half, from 32x32 (original CIFAR10 input size) to 16x16
+        # Layer 1: 7×7 conv, 64 filters, stride=2 (ImageNet input: 224×224)
+        self.conv1 = nn.Sequential(
+            ConvAct(3, 64, kernel_size=7, stride=2, padding=3, use_prelu=use_prelu, use_builtin_conv=use_builtin_conv, prelu_channel_wise=prelu_channel_wise),  # 224×224 → 112×112
+            ManualMaxPool2d(kernel_size=3, stride=3, padding=0)  # 112×112 → 37×37
         )
-
-        # 3 × (128-ch) conv stack
-        self.stage2 = nn.Sequential(
-            *[ConvAct(  64 if i == 0 else 128, 128, use_prelu, use_builtin_conv) for i in range(3)],
-            nn.MaxPool2d(kernel_size=2)   # 16→8: Reduces spatial dimensions by half, from 16x16 to 8x8
+        
+        # conv2_x: 4 layers of 2×2, 128 filters
+        self.conv2 = nn.Sequential(
+            *[ConvAct(64 if i == 0 else 128, 128, kernel_size=2, stride=1, padding=0, use_prelu=use_prelu, use_builtin_conv=use_builtin_conv, prelu_channel_wise=prelu_channel_wise) for i in range(4)],  # 37×37 → 36×36 → 35×35 → 34×34 → 33×33
+            ManualMaxPool2d(kernel_size=2, stride=2)  # 33×33 → 16×16
         )
-
-        # 3 × (256-ch) conv stack
-        self.stage3 = nn.Sequential(
-            *[ConvAct(  128 if i == 0 else 256, 256, use_prelu, use_builtin_conv) for i in range(6)],
-            nn.MaxPool2d(kernel_size=2)   # 8→4: Reduces spatial dimensions by half, from 8x8 to 4x4
+        
+        # conv3_x: 6 layers of 2×2, 256 filters  
+        self.conv3 = nn.Sequential(
+            *[ConvAct(128 if i == 0 else 256, 256, kernel_size=2, stride=1, padding=0, use_prelu=use_prelu, use_builtin_conv=use_builtin_conv, prelu_channel_wise=prelu_channel_wise) for i in range(6)],  # 16×16 → 15×15 → 14×14 → 13×13 → 12×12 → 11×11
         )
-
+        
+        # Spatial Pyramid Pooling (as used in PReLU paper)
+        # Levels {6,3,2,1} create 6²+3²+2²+1² = 36+9+4+1 = 50 bins per channel
+        self.spp = nn.Sequential(
+            SpatialPyramidPooling(levels=[6, 3, 2, 1]),
+            nn.Flatten(2),
+        )
+        
         self.classifier = nn.Sequential(
-            # Step 1: Global Average Pooling - Reduces spatial dimensions from 4×4 to 1×1
-            # This converts the 4×4×256 feature maps to 1×1, effectively averaging each channel
-            nn.AdaptiveAvgPool2d(1),          # 4×4 → 1×1
-            
-            # Step 2: Flatten - Converts 3D tensor (batch, channels, 1, 1) to 2D tensor (batch, channels)
-            # This removes the spatial dimensions, leaving only batch and feature dimensions
-            nn.Flatten(),
-            
-            # Step 3: First Dropout - Randomly sets 50% of inputs to zero during training
-            # This helps prevent overfitting by forcing the network to not rely on specific neurons
-            nn.Dropout(0.5),
-            
-            # Step 4: First Linear Layer - Expands from 256 features to 4096 features
-            # This creates a large hidden layer for learning complex representations
-            nn.Linear(256, 4096),
-            
-            # Step 5: First Activation - Applies PReLU or ReLU based on use_prelu parameter
-            # PReLU learns the negative slope parameter, while ReLU uses fixed slope of 0
-            nn.PReLU(4096) if use_prelu else nn.ReLU(inplace=True),
-            
-            # Step 6: Second Dropout - Another 50% dropout for additional regularization
-            # Multiple dropout layers help prevent co-adaptation of neurons
-            nn.Dropout(0.5),
-            
-            # Step 7: Second Linear Layer - Maps from 4096 to 4096 features
-            # This creates another large hidden layer for further feature learning
-            nn.Linear(4096, 4096),
-            
-            # Step 8: Second Activation
-            # Provides non-linearity after the second linear transformation
-            nn.PReLU(4096) if use_prelu else nn.ReLU(inplace=True),
-            
-            # Step 9: Final Linear Layer - Maps from 4096 features to 10 classes (CIFAR10)
-            # This is the output layer that produces logits for each of the 10 classes
-            nn.Linear(4096, 10)
+            nn.Linear(256 * 50, 4096, bias=True),               # 12 800 → 4 096
+            nn.PReLU(4096 if (use_prelu and prelu_channel_wise) else 1)
+                if use_prelu else nn.ReLU(inplace=True),
+            nn.Dropout(0.5),                                    # ← after fc1 activation
+
+            nn.Linear(4096, 4096, bias=True),                   # 4 096 → 4 096
+            nn.PReLU(4096 if (use_prelu and prelu_channel_wise) else 1)
+                if use_prelu else nn.ReLU(inplace=True),
+            nn.Dropout(0.5),                                    # ← after fc2 activation
+
+            nn.Linear(4096, num_classes)                        # 4 096 → 1 000 (or 10)
         )
         
     def forward(self, x):
-        x = self.stage1(x)
-        x = self.stage2(x)
-        x = self.stage3(x)
+        x = self.conv1(x)
+        x = self.conv2(x)
+        x = self.conv3(x)
+        
+        # Apply SPP and flatten
+        x = self.spp(x)  # (batch, 256, 50)
+        
         return self.classifier(x)
 
 # -------------------------------------------------------
 # Data preprocessing functions
 # -------------------------------------------------------
 def preprocess_images(examples):
-    """Preprocess images for the model."""
+    """Preprocess images for ImageNet."""
     images = []
-    for image in examples['img']:
+    
+    # ImageNet normalization values (standard for pretrained models)
+    mean = [0.485, 0.456, 0.406]
+    std = [0.229, 0.224, 0.225]
+    
+    for image in examples['image']:  # ImageNet uses 'image' column
         if isinstance(image, str):
             # If image is a file path, load it and convert to RGB color mode (3 channels: Red, Green, Blue)
             # This ensures consistent color format regardless of input image type
@@ -353,7 +358,10 @@ def preprocess_images(examples):
             # If image is numpy array, convert to PIL Image (Python Imaging Library)
             image = Image.fromarray(image)
         
-        # Convert to tensor and normalize
+        # Resize to 224×224 (ImageNet standard)
+        image = image.resize((224, 224), Image.BILINEAR)
+        
+        # Convert to tensor
         image = torch.tensor(np.array(image), dtype=torch.float32)
         # Step 1: Rearrange dimensions from Height-Width-Channel (HWC) to Channel-Height-Width (CHW)
         # This is required because PyTorch expects images in CHW format, but PIL/OpenCV use HWC
@@ -362,11 +370,13 @@ def preprocess_images(examples):
         # Step 2: Normalize pixel values from [0, 255] range to [0, 1] range
         # Neural networks work better with normalized inputs, and 255.0 ensures float division
         image = image / 255.0
+        for c in range(3):
+            image[c] = (image[c] - mean[c]) / std[c]
+            
         images.append(image)
     
     examples['pixel_values'] = images
-    # CIFAR-10 uses 'label' column, not 'labels'
-    examples['labels'] = examples['label']
+    examples['labels'] = examples['label']  # ImageNet uses 'label' column
     return examples
 
 # -------------------------------------------------------
