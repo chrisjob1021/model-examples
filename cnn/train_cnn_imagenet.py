@@ -25,25 +25,13 @@ def main():
         print(f"GPU Memory: {torch.cuda.get_device_properties(0).total_memory / 1e9:.1f} GB")
     
     # Load ImageNet dataset (subset for faster training)
-    print("\n📥 Loading ImageNet dataset...")
-    try:
-        # Use subset for faster experimentation
-        train_dataset = load_dataset("imagenet-1k", split="train[:10000]")  # 10k samples
-        eval_dataset = load_dataset("imagenet-1k", split="validation[:2000]")  # 2k samples
-        
-        print(f"✅ Training samples: {len(train_dataset):,}")
-        print(f"✅ Validation samples: {len(eval_dataset):,}")
-        num_classes = 1000
-        
-    except Exception as e:
-        print(f"❌ Error loading ImageNet: {e}")
-        print("🔄 Falling back to CIFAR-10...")
-        
-        train_dataset = load_dataset("cifar10", split="train[:5000]")
-        eval_dataset = load_dataset("cifar10", split="test[:1000]")
-        num_classes = 10
-        
-        print(f"✅ CIFAR-10 - Training: {len(train_dataset):,}, Validation: {len(eval_dataset):,}")
+    # Use subset for faster experimentation
+    train_dataset = load_dataset("imagenet-1k", split="train")  # 10k samples
+    eval_dataset = load_dataset("imagenet-1k", split="validation[:2000]")  # 2k samples
+    
+    print(f"✅ Training samples: {len(train_dataset):,}")
+    print(f"✅ Validation samples: {len(eval_dataset):,}")
+    num_classes = 1000
     
     # Create ReLU CNN model
     print(f"\n🏗️ Creating ReLU CNN model ({num_classes} classes)...")

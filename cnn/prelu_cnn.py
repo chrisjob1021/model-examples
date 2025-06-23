@@ -11,11 +11,7 @@ you can compare the impact of PReLU on accuracy.
 import torch
 from torch import nn
 import torch.nn.functional as F
-from torch.utils.data import DataLoader
-from transformers import (
-    Trainer, 
-    TrainingArguments
-)
+from transformers import Trainer
 import numpy as np
 from PIL import Image
 import math
