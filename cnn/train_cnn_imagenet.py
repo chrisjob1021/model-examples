@@ -26,7 +26,7 @@ def main():
     
     # Load ImageNet dataset (subset for faster training)
     # Use subset for faster experimentation
-    train_dataset = load_dataset("imagenet-1k", split="train")  # 10k samples
+    train_dataset = load_dataset("imagenet-1k", split="train")
     eval_dataset = load_dataset("imagenet-1k", split="validation[:2000]")  # 2k samples
     
     print(f"✅ Training samples: {len(train_dataset):,}")

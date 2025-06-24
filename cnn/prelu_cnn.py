@@ -396,22 +396,34 @@ def preprocess_images(examples):
             image = Image.open(image).convert('RGB')
         elif isinstance(image, np.ndarray):
             # If image is numpy array, convert to PIL Image (Python Imaging Library)
-            image = Image.fromarray(image)
+            # Handle both grayscale and RGB images by converting to RGB
+            if len(image.shape) == 2:
+                # Grayscale image - convert to RGB
+                image = Image.fromarray(image).convert('RGB')
+            elif len(image.shape) == 3:
+                # RGB image
+                image = Image.fromarray(image)
+            else:
+                # Unexpected format - convert to RGB
+                image = Image.fromarray(image).convert('RGB')
         
         # Resize to 224×224 (ImageNet standard)
         image = image.resize((224, 224), Image.BILINEAR)
         
-        # Convert to tensor
+        # Convert to tensor - at this point image is always RGB (3D HWC)
         image = torch.tensor(np.array(image), dtype=torch.float32)
-        # Step 1: Rearrange dimensions from Height-Width-Channel (HWC) to Channel-Height-Width (CHW)
+        
+        # Rearrange dimensions from Height-Width-Channel (HWC) to Channel-Height-Width (CHW)
         # This is required because PyTorch expects images in CHW format, but PIL/OpenCV use HWC
         image = image.permute(2, 0, 1)
         
-        # Step 2: Normalize pixel values from [0, 255] range to [0, 1] range
+        # Normalize pixel values from [0, 255] range to [0, 1] range
         # Neural networks work better with normalized inputs, and 255.0 ensures float division
         image = image / 255.0
         for c in range(3):
             image[c] = (image[c] - mean[c]) / std[c]
+        # After normalization: values typically range from ~[-2.5, 2.5]
+        # This is because: (0 - mean) / std ≈ -2.1 and (1 - mean) / std ≈ 2.6
             
         images.append(image)
     
