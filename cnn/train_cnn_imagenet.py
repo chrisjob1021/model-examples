@@ -8,7 +8,7 @@ from transformers import TrainingArguments
 # Import from shared_utils package
 from shared_utils import ModelTrainer
 
-from prelu_cnn import CNN, CNNTrainer, preprocess_images
+from prelu_cnn import CNN, CNNTrainer
 
 def main():
     """Train ReLU CNN on ImageNet."""
@@ -24,11 +24,18 @@ def main():
         print(f"GPU: {torch.cuda.get_device_name()}")
         print(f"GPU Memory: {torch.cuda.get_device_properties(0).total_memory / 1e9:.1f} GB")
     
-    # Load ImageNet dataset (subset for faster training)
-    # Use subset for faster experimentation
-    train_dataset = load_dataset("imagenet-1k", split="train")
-    eval_dataset = load_dataset("imagenet-1k", split="validation[:2000]")  # 2k samples
+    # Load preprocessed ImageNet dataset from disk
+    print("🔄 Loading preprocessed datasets from disk...")
     
+    # Load training dataset
+    train_dataset_path = "./preprocessed_datasets/preprocessed-imagenet-1k-train-100samples.arrow"
+    train_dataset = load_dataset("arrow", data_files=train_dataset_path, split="train")
+    
+    # Load validation dataset  
+    eval_dataset_path = "./preprocessed_datasets/preprocessed-imagenet-1k-validation-100samples.arrow"
+    eval_dataset = load_dataset("arrow", data_files=eval_dataset_path, split="train")
+    
+    print(f"✅ Loaded preprocessed datasets from disk")
     print(f"✅ Training samples: {len(train_dataset):,}")
     print(f"✅ Validation samples: {len(eval_dataset):,}")
     num_classes = 1000
@@ -87,18 +94,12 @@ def main():
         training_args=training_args,
         train_dataset=train_dataset,
         eval_dataset=eval_dataset,
-        preprocess_fn=preprocess_images,
         trainer_class=CNNTrainer
     )
     
     # Run training
     print(f"\n🎯 Starting training...")
-    trainer_instance, results = trainer.run()
-    
-    # Print final results
-    print(f"\n{'='*60}")
-    print("🏆 TRAINING COMPLETED")
-    print(f"{'='*60}")
+    _, results = trainer.run()
     
     accuracy = results.get('eval_accuracy', 0.0)
     loss = results.get('eval_loss', float('inf'))
@@ -107,11 +108,6 @@ def main():
     print(f"  🎯 Accuracy: {accuracy:.4f}")
     print(f"  📉 Loss: {loss:.4f}")
     print(f"  💾 Model saved to: {training_args.output_dir}")
-    
-    # Additional metrics if available
-    for key, value in results.items():
-        if key not in ['eval_accuracy', 'eval_loss']:
-            print(f"  📊 {key}: {value}")
     
     print(f"\n✅ Training completed successfully!")
     print(f"📁 Check {training_args.output_dir} for saved model and logs")

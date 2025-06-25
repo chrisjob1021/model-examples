@@ -413,9 +413,23 @@ def preprocess_images(examples):
         # Convert to tensor - at this point image is always RGB (3D HWC)
         image = torch.tensor(np.array(image), dtype=torch.float32)
         
-        # Rearrange dimensions from Height-Width-Channel (HWC) to Channel-Height-Width (CHW)
-        # This is required because PyTorch expects images in CHW format, but PIL/OpenCV use HWC
-        image = image.permute(2, 0, 1)
+        # Safety check: ensure tensor is 3D (HWC format)
+        if image.dim() == 2:
+            # If somehow we still have a 2D tensor, convert to RGB by repeating the channel
+            # This line converts a 2D grayscale image tensor to a 3-channel RGB tensor:
+            # 1. unsqueeze(0) adds a dimension at position 0: (H, W) -> (1, H, W)
+            # 2. repeat(3, 1, 1) repeats the single channel 3 times: (1, H, W) -> (3, H, W)
+            #    - First argument (3): repeat the channel dimension 3 times
+            #    - Second argument (1): don't repeat the height dimension
+            #    - Third argument (1): don't repeat the width dimension
+            # Result: grayscale image becomes RGB with identical values in all 3 channels
+            image = image.unsqueeze(0).repeat(3, 1, 1)  # (H, W) -> (3, H, W)
+        elif image.dim() == 3:
+            # Rearrange dimensions from Height-Width-Channel (HWC) to Channel-Height-Width (CHW)
+            # This is required because PyTorch expects images in CHW format, but PIL/OpenCV use HWC
+            image = image.permute(2, 0, 1)
+        else:
+            raise ValueError(f"Unexpected image tensor shape: {image.shape}")
         
         # Normalize pixel values from [0, 255] range to [0, 1] range
         # Neural networks work better with normalized inputs, and 255.0 ensures float division
