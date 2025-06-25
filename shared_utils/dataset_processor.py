@@ -100,13 +100,13 @@ class DatasetProcessor:
         
         if isinstance(self.processed_dataset, DatasetDict):
             # Save entire DatasetDict to disk
-            filename = f"{self.processor_name}_{self.timestamp}"
+            filename = f"{self.processor_name}"
             filepath = self.output_dir / filename
             self.processed_dataset.save_to_disk(str(filepath))
             saved_files["dataset_dict"] = str(filepath)
         else:
             # Save single dataset to disk
-            filename = f"{self.processor_name}_{self.timestamp}"
+            filename = f"{self.processor_name}"
             filepath = self.output_dir / filename
             self.processed_dataset.save_to_disk(str(filepath))
             saved_files["dataset"] = str(filepath)

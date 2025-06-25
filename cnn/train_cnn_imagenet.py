@@ -2,7 +2,7 @@
 """Train ReLU CNN on ImageNet using ModelTrainer"""
 
 import torch
-from datasets import load_dataset
+from datasets import load_from_disk
 from transformers import TrainingArguments
 
 # Import from shared_utils package
@@ -28,24 +28,31 @@ def main():
     print("🔄 Loading preprocessed datasets from disk...")
     
     # Load training dataset
-    train_dataset_path = "./preprocessed_datasets/preprocessed-imagenet-1k-train-100samples.arrow"
-    train_dataset = load_dataset("arrow", data_files=train_dataset_path, split="train")
+    dataset_path = "./processed_datasets/imagenet_processor"
+    dataset = load_from_disk(dataset_path)
     
-    # Load validation dataset  
-    eval_dataset_path = "./preprocessed_datasets/preprocessed-imagenet-1k-validation-100samples.arrow"
-    eval_dataset = load_dataset("arrow", data_files=eval_dataset_path, split="train")
+    train_dataset = dataset["train"]
+    eval_dataset = dataset["validation"]
     
     print(f"✅ Loaded preprocessed datasets from disk")
     print(f"✅ Training samples: {len(train_dataset):,}")
     print(f"✅ Validation samples: {len(eval_dataset):,}")
-    num_classes = 1000
+    
+    # Display dataset info for debugging
+    print(f"📊 Dataset Info:")
+    print(f"  Train dataset features: {list(train_dataset.features.keys())}")
+    print(f"  Train sample keys: {list(train_dataset[0].keys())}")
+    print(f"  Train sample pixel_values shape: {len(train_dataset[0]['pixel_values'])}")
+    print(f"  Train sample labels: {train_dataset[0]['labels']}")
+    
+    use_prelu = False
     
     # Create ReLU CNN model
-    print(f"\n🏗️ Creating ReLU CNN model ({num_classes} classes)...")
+    print(f"\n🏗️ Creating ReLU CNN model ({1000} classes)...")
     model = CNN(
-        use_prelu=False,  # Use ReLU
+        use_prelu=use_prelu,  # Use ReLU
         use_builtin_conv=True,  # Use fast PyTorch convolutions
-        num_classes=num_classes
+        num_classes=1000
     )
     
     # Count parameters
@@ -58,26 +65,21 @@ def main():
     
     # Create training arguments
     training_args = TrainingArguments(
-        output_dir="./relu_cnn_results",
-        num_train_epochs=3,
-        per_device_train_batch_size=8,
-        per_device_eval_batch_size=16,
-        learning_rate=5e-4,
-        weight_decay=0.01,
-        warmup_steps=100,
-        fp16=True,  # Mixed precision for faster training
-        gradient_accumulation_steps=2,
-        dataloader_num_workers=2,
-        evaluation_strategy="steps",
-        eval_steps=100,
-        logging_steps=25,
-        save_steps=200,
-        load_best_model_at_end=True,
-        metric_for_best_model="accuracy",
-        greater_is_better=True,
+        output_dir=f"./results/cnn_results_{'prelu' if use_prelu else 'relu'}",
+        num_train_epochs=1,
+        per_device_train_batch_size=128,
+        per_device_eval_batch_size=128,
+        learning_rate=0.01,
+        weight_decay=0.001,
+        warmup_steps=0,  # not applicable to SGD
+        gradient_accumulation_steps=16,
+        eval_steps=500,
+        logging_steps=50,
+        save_steps=100,
         seed=42,
-        remove_unused_columns=False,
         logging_dir="./logs",
+        # Fix for custom dataset format
+        remove_unused_columns=False,  # Don't remove any columns automatically
     )
     
     print(f"\n⚙️ Training Configuration:")
@@ -86,6 +88,7 @@ def main():
     print(f"  Learning rate: {training_args.learning_rate}")
     print(f"  Evaluation steps: {training_args.eval_steps}")
     print(f"  Output directory: {training_args.output_dir}")
+    print(f"  Remove unused columns: {training_args.remove_unused_columns}")
     
     # Create trainer using ModelTrainer
     print(f"\n🏋️ Setting up trainer...")
