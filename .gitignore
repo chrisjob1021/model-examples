@@ -3,3 +3,4 @@
 .vscode/
 *.egg-info/
 processed_datasets/
+results/

@@ -107,13 +107,8 @@ def main():
     accuracy = results.get('eval_accuracy', 0.0)
     loss = results.get('eval_loss', float('inf'))
     
-    print(f"📈 Final Results:")
-    print(f"  🎯 Accuracy: {accuracy:.4f}")
-    print(f"  📉 Loss: {loss:.4f}")
-    print(f"  💾 Model saved to: {training_args.output_dir}")
-    
+    print(f"💾 Model saved to: {training_args.output_dir}")
     print(f"\n✅ Training completed successfully!")
-    print(f"📁 Check {training_args.output_dir} for saved model and logs")
 
 if __name__ == "__main__":
     main() 

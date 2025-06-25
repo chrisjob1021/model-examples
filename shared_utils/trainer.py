@@ -77,14 +77,11 @@ class ModelTrainer:
         )
 
         print("Starting training...")
-        trainer.train()
+        train_results = trainer.train()
 
         print("Evaluating model...")
-        results = trainer.evaluate()
+        eval_results = trainer.evaluate()
 
-        accuracy_key = next(
-            (k for k in results.keys() if "accuracy" in k), "eval_accuracy"
-        )
-
-        print(f"Final test accuracy: {results.get(accuracy_key, 'N/A'):.4f}")
-        return trainer, results 
+        print(f"Train results: {train_results}")
+        print(f"Eval results: {eval_results}")
+        return trainer, train_results, eval_results 

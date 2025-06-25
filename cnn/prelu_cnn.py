@@ -368,8 +368,19 @@ class CNN(nn.Module):
             nn.Linear(4096, num_classes)                        # 4 096 → 1 000 (or 10)
         )
         
-    def forward(self, x):
-        x = self.conv1(x)
+    def forward(self, x=None, pixel_values=None, **kwargs):
+        # Handle both positional and keyword arguments for compatibility with HuggingFace Trainer
+        if x is not None:
+            input_tensor = x
+        elif pixel_values is not None:
+            input_tensor = pixel_values
+        else:
+            # Try to get pixel_values from kwargs
+            input_tensor = kwargs.get('pixel_values')
+            if input_tensor is None:
+                raise ValueError("No input tensor provided. Expected 'x' or 'pixel_values' argument.")
+        
+        x = self.conv1(input_tensor)
         x = self.conv2(x)
         x = self.conv3(x)
         
@@ -451,9 +462,22 @@ def preprocess_images(examples):
 class CNNTrainer(Trainer):
     """Custom trainer for CNN models."""
 
-    def compute_loss(self, model, inputs, return_outputs=False):
+    def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
         pixel_values = inputs["pixel_values"]
         labels = inputs["labels"]
+
+        # Convert pixel_values to tensor if it's not already
+        if not isinstance(pixel_values, torch.Tensor):
+            if isinstance(pixel_values, list):
+                # Convert list of tensors to batch tensor
+                pixel_values = torch.stack(pixel_values)
+            else:
+                # Convert numpy array to tensor
+                pixel_values = torch.from_numpy(pixel_values)
+
+        # Convert labels to tensor if it's not already
+        if not isinstance(labels, torch.Tensor):
+            labels = torch.tensor(labels, dtype=torch.long)
 
         outputs = model(pixel_values)
         loss_fn = nn.CrossEntropyLoss()
