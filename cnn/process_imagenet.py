@@ -33,10 +33,11 @@ def main():
         preprocess_fn=preprocess_images,
         processor_name="imagenet_processor",
         split_limits={
-            "train": 100,      # Limit to 100 training samples
-            "validation": 100,  # Limit to 100 validation samples
-            "test": 100         # Limit to 100 test samples
+            "train": None,
+            "validation": None,
+            "test": None
         },
+        num_threads=2,
         trust_remote_code=True,       # Trust remote code for dataset loading
     )
     

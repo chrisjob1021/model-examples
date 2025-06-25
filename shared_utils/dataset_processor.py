@@ -2,6 +2,7 @@ from pathlib import Path
 from typing import Any, Dict, Optional, Callable
 from datetime import datetime
 import logging
+import os
 
 from datasets import DatasetDict, load_dataset
 
@@ -20,6 +21,7 @@ class DatasetProcessor:
         preprocess_fn: Callable,
         processor_name: Optional[str] = None,
         split_limits: Optional[Dict[str, int]] = None,
+        num_threads: Optional[int] = None,
         **load_dataset_kwargs
     ):
         """
@@ -31,6 +33,7 @@ class DatasetProcessor:
             processor_name: Name for this processor instance (used in file naming)
             preprocess_fn: Function to apply preprocessing to the dataset
             split_limits: Dictionary mapping split names to maximum number of features to process
+            num_threads: Number of threads to use for processing (defaults to os.cpu_count())
             **load_dataset_kwargs: Additional arguments to pass to load_dataset
         """
         self.dataset_name = dataset_name
@@ -38,12 +41,14 @@ class DatasetProcessor:
         self.processor_name = processor_name or "dataset_processor"
         self.preprocess_fn = preprocess_fn
         self.split_limits = split_limits or {}
+        self.num_threads = num_threads or os.cpu_count()
         self.load_dataset_kwargs = load_dataset_kwargs
         
         # Load the dataset using load_dataset
         self.logger = logging.getLogger(f"{self.__class__.__name__}")
         self.logger.setLevel(logging.INFO)
         self.logger.info(f"Loading dataset: {dataset_name}")
+        self.logger.info(f"Using {self.num_threads} threads for processing")
         
         self.dataset = load_dataset(dataset_name, **load_dataset_kwargs)
         
@@ -68,7 +73,7 @@ class DatasetProcessor:
                 self.logger.info(f"Processing split: {split_name}")
                 
                 # Apply split limit if specified
-                if split_name in self.split_limits:
+                if split_name in self.split_limits and self.split_limits[split_name] is not None:
                     limit = self.split_limits[split_name]
                     self.logger.info(f"Limiting {split_name} to {limit} features")
                     split_dataset = split_dataset.select(range(min(limit, len(split_dataset))))
@@ -77,6 +82,7 @@ class DatasetProcessor:
                     self.preprocess_fn, 
                     batched=True, 
                     batch_size=100,
+                    num_proc=self.num_threads,
                     desc=f"Preprocessing {split_name}",
                     remove_columns=split_dataset.column_names
                 )
@@ -87,6 +93,7 @@ class DatasetProcessor:
                 self.preprocess_fn,
                 batched=True,
                 batch_size=100,
+                num_proc=self.num_threads,
                 desc="Preprocessing dataset",
                 remove_columns=self.dataset.column_names
             )
@@ -137,6 +144,7 @@ class DatasetProcessor:
             "output_dir": str(self.output_dir),
             "saved_files": saved_files,
             "split_limits": self.split_limits,
+            "num_threads": self.num_threads,
             "success": True
         }
         
