@@ -84,8 +84,6 @@ def main():
         
     except Exception as e:
         print(f"❌ Error processing dataset: {e}")
-        print(f"💡 Make sure you have access to the ImageNet-1k dataset")
-        print(f"💡 You may need to download it manually or have proper credentials")
         return
     
     print(f"\n✅ ImageNet-1k processing completed successfully!")

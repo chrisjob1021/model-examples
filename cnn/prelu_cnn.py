@@ -401,56 +401,60 @@ def preprocess_images(examples):
     std = [0.229, 0.224, 0.225]
     
     for image in examples['image']:  # ImageNet uses 'image' column
-        if isinstance(image, str):
-            # If image is a file path, load it and convert to RGB color mode (3 channels: Red, Green, Blue)
-            # This ensures consistent color format regardless of input image type
-            image = Image.open(image).convert('RGB')
-        elif isinstance(image, np.ndarray):
-            # If image is numpy array, convert to PIL Image (Python Imaging Library)
-            # Handle both grayscale and RGB images by converting to RGB
-            if len(image.shape) == 2:
-                # Grayscale image - convert to RGB
-                image = Image.fromarray(image).convert('RGB')
-            elif len(image.shape) == 3:
-                # RGB image
-                image = Image.fromarray(image)
-            else:
-                # Unexpected format - convert to RGB
-                image = Image.fromarray(image).convert('RGB')
-        
-        # Resize to 224×224 (ImageNet standard)
-        image = image.resize((224, 224), Image.BILINEAR)
-        
-        # Convert to tensor - at this point image is always RGB (3D HWC)
-        image = torch.tensor(np.array(image), dtype=torch.float32)
-        
-        # Safety check: ensure tensor is 3D (HWC format)
-        if image.dim() == 2:
-            # If somehow we still have a 2D tensor, convert to RGB by repeating the channel
-            # This line converts a 2D grayscale image tensor to a 3-channel RGB tensor:
-            # 1. unsqueeze(0) adds a dimension at position 0: (H, W) -> (1, H, W)
-            # 2. repeat(3, 1, 1) repeats the single channel 3 times: (1, H, W) -> (3, H, W)
-            #    - First argument (3): repeat the channel dimension 3 times
-            #    - Second argument (1): don't repeat the height dimension
-            #    - Third argument (1): don't repeat the width dimension
-            # Result: grayscale image becomes RGB with identical values in all 3 channels
-            image = image.unsqueeze(0).repeat(3, 1, 1)  # (H, W) -> (3, H, W)
-        elif image.dim() == 3:
-            # Rearrange dimensions from Height-Width-Channel (HWC) to Channel-Height-Width (CHW)
-            # This is required because PyTorch expects images in CHW format, but PIL/OpenCV use HWC
-            image = image.permute(2, 0, 1)
-        else:
-            raise ValueError(f"Unexpected image tensor shape: {image.shape}")
-        
-        # Normalize pixel values from [0, 255] range to [0, 1] range
-        # Neural networks work better with normalized inputs, and 255.0 ensures float division
-        image = image / 255.0
-        for c in range(3):
-            image[c] = (image[c] - mean[c]) / std[c]
-        # After normalization: values typically range from ~[-2.5, 2.5]
-        # This is because: (0 - mean) / std ≈ -2.1 and (1 - mean) / std ≈ 2.6
+        try:
+            if isinstance(image, str):
+                # If image is a file path, load it and convert to RGB color mode (3 channels: Red, Green, Blue)
+                # This ensures consistent color format regardless of input image type
+                image = Image.open(image).convert('RGB')
+            elif isinstance(image, np.ndarray):
+                # If image is numpy array, convert to PIL Image (Python Imaging Library)
+                # Handle both grayscale and RGB images by converting to RGB
+                if len(image.shape) == 2:
+                    # Grayscale image - convert to RGB
+                    image = Image.fromarray(image).convert('RGB')
+                elif len(image.shape) == 3:
+                    # RGB image
+                    image = Image.fromarray(image)
+                else:
+                    # Unexpected format - convert to RGB
+                    image = Image.fromarray(image).convert('RGB')
             
-        images.append(image)
+            # Resize to 224×224 (ImageNet standard)
+            image = image.resize((224, 224), Image.BILINEAR)
+            
+            # Convert to tensor - at this point image is always RGB (3D HWC)
+            image = torch.tensor(np.array(image), dtype=torch.float32)
+            
+            # Safety check: ensure tensor is 3D (HWC format)
+            if image.dim() == 2:
+                # If somehow we still have a 2D tensor, convert to RGB by repeating the channel
+                # This line converts a 2D grayscale image tensor to a 3-channel RGB tensor:
+                # 1. unsqueeze(0) adds a dimension at position 0: (H, W) -> (1, H, W)
+                # 2. repeat(3, 1, 1) repeats the single channel 3 times: (1, H, W) -> (3, H, W)
+                #    - First argument (3): repeat the channel dimension 3 times
+                #    - Second argument (1): don't repeat the height dimension
+                #    - Third argument (1): don't repeat the width dimension
+                # Result: grayscale image becomes RGB with identical values in all 3 channels
+                image = image.unsqueeze(0).repeat(3, 1, 1)  # (H, W) -> (3, H, W)
+            elif image.dim() == 3:
+                # Rearrange dimensions from Height-Width-Channel (HWC) to Channel-Height-Width (CHW)
+                # This is required because PyTorch expects images in CHW format, but PIL/OpenCV use HWC
+                image = image.permute(2, 0, 1)
+            else:
+                raise ValueError(f"Unexpected image tensor shape: {image.shape}")
+            
+            # Normalize pixel values from [0, 255] range to [0, 1] range
+            # Neural networks work better with normalized inputs, and 255.0 ensures float division
+            image = image / 255.0
+            for c in range(3):
+                image[c] = (image[c] - mean[c]) / std[c]
+            # After normalization: values typically range from ~[-2.5, 2.5]
+            # This is because: (0 - mean) / std ≈ -2.1 and (1 - mean) / std ≈ 2.6
+                
+            images.append(image)
+        except Exception as e:
+            print(f"Error processing image: {e}")
+            continue
     
     examples['pixel_values'] = images
     examples['labels'] = examples['label']  # ImageNet uses 'label' column
