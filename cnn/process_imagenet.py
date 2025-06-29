@@ -38,6 +38,7 @@ def main():
             "test": None
         },
         num_threads=2,
+        start_index=None,  # Start from this position to reproduce the error
         trust_remote_code=True,       # Trust remote code for dataset loading
     )
     
@@ -47,7 +48,6 @@ def main():
     
     # Process the dataset
     print(f"\n🔄 Processing ImageNet-1k dataset...")
-    print("This may take a while for the first run as the dataset needs to be downloaded...")
     
     try:
         results = processor.process()

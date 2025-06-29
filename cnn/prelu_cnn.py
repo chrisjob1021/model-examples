@@ -400,7 +400,10 @@ def preprocess_images(examples):
     mean = [0.485, 0.456, 0.406]
     std = [0.229, 0.224, 0.225]
     
-    for image in examples['image']:  # ImageNet uses 'image' column
+    successful_images = []
+    successful_labels = []
+    
+    for i, image in enumerate(examples['image']):  # ImageNet uses 'image' column
         try:
             if isinstance(image, str):
                 # If image is a file path, load it and convert to RGB color mode (3 channels: Red, Green, Blue)
@@ -451,13 +454,16 @@ def preprocess_images(examples):
             # After normalization: values typically range from ~[-2.5, 2.5]
             # This is because: (0 - mean) / std ≈ -2.1 and (1 - mean) / std ≈ 2.6
                 
-            images.append(image)
+            # Only add image and corresponding label if processing succeeded
+            successful_images.append(image)
+            successful_labels.append(examples['label'][i])
         except Exception as e:
-            print(f"Error processing image: {e}")
+            # Skip this image if any error occurs (including UTF-8 encoding errors)
+            print(f"Warning: Skipping image due to error: {type(e).__name__}: {e}")
             continue
     
-    examples['pixel_values'] = images
-    examples['labels'] = examples['label']  # ImageNet uses 'label' column
+    examples['pixel_values'] = successful_images
+    examples['labels'] = successful_labels  # ImageNet uses 'label' column
     return examples
 
 # -------------------------------------------------------

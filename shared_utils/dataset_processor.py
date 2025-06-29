@@ -22,6 +22,7 @@ class DatasetProcessor:
         processor_name: Optional[str] = None,
         split_limits: Optional[Dict[str, int]] = None,
         num_threads: Optional[int] = None,
+        start_index: Optional[int] = None,
         **load_dataset_kwargs
     ):
         """
@@ -34,6 +35,7 @@ class DatasetProcessor:
             preprocess_fn: Function to apply preprocessing to the dataset
             split_limits: Dictionary mapping split names to maximum number of features to process
             num_threads: Number of threads to use for processing (defaults to os.cpu_count())
+            start_index: Index to start processing from (for debugging specific positions)
             **load_dataset_kwargs: Additional arguments to pass to load_dataset
         """
         self.dataset_name = dataset_name
@@ -42,6 +44,7 @@ class DatasetProcessor:
         self.preprocess_fn = preprocess_fn
         self.split_limits = split_limits or {}
         self.num_threads = num_threads or os.cpu_count()
+        self.start_index = start_index
         self.load_dataset_kwargs = load_dataset_kwargs
         
         # Load the dataset using load_dataset
@@ -66,6 +69,16 @@ class DatasetProcessor:
         """Apply preprocessing function to the dataset using HuggingFace datasets."""
         self.logger.info("Applying preprocessing function...")
         
+        # Centralize map arguments
+        map_kwargs = {
+            'function': self.preprocess_fn,
+            'batched': True,
+            'batch_size': 200,
+            'num_proc': 1,  # Disable multithreading to avoid encoding issues
+            'load_from_cache_file': False,
+            'writer_batch_size': 1000,
+        }
+
         if isinstance(self.dataset, DatasetDict):
             # Process each split separately
             self.processed_dataset = DatasetDict()
@@ -78,24 +91,24 @@ class DatasetProcessor:
                     self.logger.info(f"Limiting {split_name} to {limit} features")
                     split_dataset = split_dataset.select(range(min(limit, len(split_dataset))))
                 
+                # Apply start_index if specified (for debugging specific positions)
+                if self.start_index is not None:
+                    self.logger.info(f"Starting {split_name} from index {self.start_index}")
+                    split_dataset = split_dataset.select(range(self.start_index, len(split_dataset)))
+                
                 processed_split = split_dataset.map(
-                    self.preprocess_fn, 
-                    batched=True, 
-                    batch_size=100,
-                    num_proc=self.num_threads,
                     desc=f"Preprocessing {split_name}",
-                    remove_columns=split_dataset.column_names
+                    remove_columns=split_dataset.column_names,
+                    **map_kwargs
                 )
                 self.processed_dataset[split_name] = processed_split
         else:
             # Process single dataset
+            
             self.processed_dataset = self.dataset.map(
-                self.preprocess_fn,
-                batched=True,
-                batch_size=100,
-                num_proc=self.num_threads,
                 desc="Preprocessing dataset",
-                remove_columns=self.dataset.column_names
+                remove_columns=self.dataset.column_names,
+                **map_kwargs
             )
         self.logger.info("Preprocessing completed successfully")
 
