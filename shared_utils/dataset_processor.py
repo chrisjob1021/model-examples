@@ -74,9 +74,9 @@ class DatasetProcessor:
             'function': self.preprocess_fn,
             'batched': True,
             'batch_size': 200,
-            'num_proc': 1,  # Disable multithreading to avoid encoding issues
+            'num_proc': 2,
             'load_from_cache_file': False,
-            'writer_batch_size': 1000,
+            # 'writer_batch_size': 1000,
         }
 
         if isinstance(self.dataset, DatasetDict):
@@ -101,6 +101,10 @@ class DatasetProcessor:
                     remove_columns=split_dataset.column_names,
                     **map_kwargs
                 )
+
+                # Filter out failed images
+                processed_split = processed_split.filter(lambda x: x['ok_flags'])
+
                 self.processed_dataset[split_name] = processed_split
         else:
             # Process single dataset
@@ -110,6 +114,9 @@ class DatasetProcessor:
                 remove_columns=self.dataset.column_names,
                 **map_kwargs
             )
+            self.processed_dataset = self.processed_dataset.filter(lambda x: x['ok_flags'])
+
+        
         self.logger.info("Preprocessing completed successfully")
 
     def _save_dataset(self) -> Dict[str, str]:

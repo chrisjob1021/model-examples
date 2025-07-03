@@ -389,6 +389,9 @@ class CNN(nn.Module):
         
         return self.classifier(x)
 
+from PIL import Image, ImageFile
+ImageFile.LOAD_TRUNCATED_IMAGES = True
+
 # -------------------------------------------------------
 # Data preprocessing functions
 # -------------------------------------------------------
@@ -400,9 +403,10 @@ def preprocess_images(examples):
     mean = [0.485, 0.456, 0.406]
     std = [0.229, 0.224, 0.225]
     
-    successful_images = []
-    successful_labels = []
-    
+    pixel_values = []
+    ok_flags = []
+    labels = []
+
     for i, image in enumerate(examples['image']):  # ImageNet uses 'image' column
         try:
             if isinstance(image, str):
@@ -455,16 +459,25 @@ def preprocess_images(examples):
             # This is because: (0 - mean) / std ≈ -2.1 and (1 - mean) / std ≈ 2.6
                 
             # Only add image and corresponding label if processing succeeded
-            successful_images.append(image)
-            successful_labels.append(examples['label'][i])
+            pixel_values.append(image)
+            labels.append(examples['label'][i])
+            ok_flags.append(True)
         except Exception as e:
             # Skip this image if any error occurs (including UTF-8 encoding errors)
             print(f"Warning: Skipping image due to error: {type(e).__name__}: {e}")
+            print(f"Image path: {examples['image'][i]}")
+
+            ok_flags.append(False)
+            labels.append(examples['label'][i])
+            pixel_values.append(torch.zeros(3, 224, 224))
+
             continue
     
-    examples['pixel_values'] = successful_images
-    examples['labels'] = successful_labels  # ImageNet uses 'label' column
-    return examples
+    return {
+        'pixel_values': pixel_values,
+        'labels': labels,
+        'ok_flags': ok_flags
+    }
 
 # -------------------------------------------------------
 # Custom Trainer for CNN
