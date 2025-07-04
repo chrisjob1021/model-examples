@@ -459,7 +459,7 @@ def preprocess_images(examples):
             # This is because: (0 - mean) / std ≈ -2.1 and (1 - mean) / std ≈ 2.6
                 
             # Only add image and corresponding label if processing succeeded
-            pixel_values.append(image)
+            pixel_values.append(image.numpy())
             labels.append(examples['label'][i])
             ok_flags.append(True)
         except Exception as e:
@@ -467,12 +467,10 @@ def preprocess_images(examples):
             print(f"Warning: Skipping image due to error: {type(e).__name__}: {e}")
             print(f"Image path: {examples['image'][i]}")
 
+            pixel_values.append(torch.zeros(3, 224, 224).numpy())
+            labels.append(-100)
             ok_flags.append(False)
-            labels.append(examples['label'][i])
-            pixel_values.append(torch.zeros(3, 224, 224))
 
-            continue
-    
     return {
         'pixel_values': pixel_values,
         'labels': labels,
