@@ -4,7 +4,7 @@ from datetime import datetime
 import logging
 import os
 
-from datasets import DatasetDict, load_dataset
+from datasets import DatasetDict, load_dataset, concatenate_datasets
 
 class DatasetProcessor:
     """
@@ -23,6 +23,7 @@ class DatasetProcessor:
         split_limits: Optional[Dict[str, int]] = None,
         num_threads: Optional[int] = None,
         start_index: Optional[int] = None,
+        chunk_size: int = 50000,  # Process in chunks to prevent resource exhaustion
         **load_dataset_kwargs
     ):
         """
@@ -36,6 +37,7 @@ class DatasetProcessor:
             split_limits: Dictionary mapping split names to maximum number of features to process
             num_threads: Number of threads to use for processing (defaults to os.cpu_count())
             start_index: Index to start processing from (for debugging specific positions)
+            chunk_size: Number of samples to process in each chunk
             **load_dataset_kwargs: Additional arguments to pass to load_dataset
         """
         self.dataset_name = dataset_name
@@ -45,6 +47,7 @@ class DatasetProcessor:
         self.split_limits = split_limits or {}
         self.num_threads = num_threads or os.cpu_count()
         self.start_index = start_index
+        self.chunk_size = chunk_size
         self.load_dataset_kwargs = load_dataset_kwargs
         
         # Load the dataset using load_dataset
@@ -53,7 +56,20 @@ class DatasetProcessor:
         self.logger.info(f"Loading dataset: {dataset_name}")
         self.logger.info(f"Using {self.num_threads} threads for processing")
         
-        self.dataset = load_dataset(dataset_name, **load_dataset_kwargs)
+        # Handle UTF-8 encoding errors that can occur with large datasets like ImageNet
+        try:
+            self.dataset = load_dataset(dataset_name, **load_dataset_kwargs)
+        except UnicodeDecodeError as e:
+            self.logger.warning(f"UTF-8 decode error encountered: {e}")
+            self.logger.info("Retrying with ignore_verifications=True to handle encoding issues...")
+            try:
+                # Retry with ignore_verifications to skip problematic files
+                self.dataset = load_dataset(dataset_name, ignore_verifications=True, **load_dataset_kwargs)
+                self.logger.info("Successfully loaded dataset with ignore_verifications=True")
+            except Exception as e2:
+                self.logger.error(f"Failed to load dataset even with ignore_verifications: {e2}")
+                raise RuntimeError(f"Unable to load dataset {dataset_name} due to encoding issues. "
+                                 f"Original error: {e}. Secondary error: {e2}")
         
         # Create output directory if it doesn't exist
         self.output_dir.mkdir(parents=True, exist_ok=True)
@@ -74,9 +90,8 @@ class DatasetProcessor:
             'function': self.preprocess_fn,
             'batched': True,
             'batch_size': 200,
-            'num_proc': 2,
+            'num_proc': self.num_threads,
             'load_from_cache_file': False,
-            # 'writer_batch_size': 1000,
         }
 
         if isinstance(self.dataset, DatasetDict):
@@ -96,28 +111,104 @@ class DatasetProcessor:
                     self.logger.info(f"Starting {split_name} from index {self.start_index}")
                     split_dataset = split_dataset.select(range(self.start_index, len(split_dataset)))
                 
-                processed_split = split_dataset.map(
-                    desc=f"Preprocessing {split_name}",
-                    remove_columns=split_dataset.column_names,
-                    **map_kwargs
+                # Process in chunks to prevent resource exhaustion
+                self.processed_dataset[split_name] = self._process_split_in_chunks(
+                    split_dataset, split_name, map_kwargs
                 )
-
-                # Filter out failed images
-                processed_split = processed_split.filter(lambda x: x['ok_flags'])
-
-                self.processed_dataset[split_name] = processed_split
         else:
-            # Process single dataset
-            
-            self.processed_dataset = self.dataset.map(
-                desc="Preprocessing dataset",
-                remove_columns=self.dataset.column_names,
-                **map_kwargs
+            # Process single dataset in chunks
+            self.processed_dataset = self._process_split_in_chunks(
+                self.dataset, "dataset", map_kwargs
             )
-            self.processed_dataset = self.processed_dataset.filter(lambda x: x['ok_flags'])
-
         
         self.logger.info("Preprocessing completed successfully")
+
+    def _process_split_in_chunks(self, dataset, split_name, map_kwargs):
+        """Process a dataset split in chunks to prevent resource exhaustion."""
+        import gc
+        import psutil
+        from datasets import concatenate_datasets
+        
+        total_samples = len(dataset)
+        processed_chunks = []
+        
+        self.logger.info(f"Processing {split_name} in chunks of {self.chunk_size} samples")
+        self.logger.info(f"Total samples to process: {total_samples}")
+        
+        for chunk_start in range(0, total_samples, self.chunk_size):
+            chunk_end = min(chunk_start + self.chunk_size, total_samples)
+            chunk_num = chunk_start // self.chunk_size + 1
+            total_chunks = (total_samples + self.chunk_size - 1) // self.chunk_size
+            
+            self.logger.info(f"Processing {split_name} chunk {chunk_num}/{total_chunks} "
+                           f"(samples {chunk_start}-{chunk_end-1})")
+            
+            # Monitor memory usage
+            memory_percent = psutil.virtual_memory().percent
+            self.logger.info(f"Memory usage before chunk: {memory_percent:.1f}%")
+            
+            try:
+                # Select chunk
+                chunk_dataset = dataset.select(range(chunk_start, chunk_end))
+                
+                # Process chunk
+                processed_chunk = chunk_dataset.map(
+                    desc=f"Preprocessing {split_name} chunk {chunk_num}",
+                    remove_columns=chunk_dataset.column_names,
+                    **map_kwargs
+                )
+                
+                # No need to filter - preprocessing only returns successful images
+                processed_chunks.append(processed_chunk)
+                
+                # Save progress after each chunk
+                if processed_chunks:
+                    current_processed = concatenate_datasets(processed_chunks)
+                    self._save_chunk_progress(current_processed, split_name, chunk_num)
+                    
+                    self.logger.info(f"Chunk {chunk_num} completed: {len(processed_chunk)} samples processed")
+                    self.logger.info(f"Total processed so far: {len(current_processed)} samples")
+                
+                # Force garbage collection after each chunk
+                gc.collect()
+                
+                # Monitor memory after processing
+                memory_percent = psutil.virtual_memory().percent
+                self.logger.info(f"Memory usage after chunk: {memory_percent:.1f}%")
+                
+            except Exception as e:
+                self.logger.error(f"Error processing chunk {chunk_num}: {e}")
+                self.logger.info("Saving progress before handling error...")
+                
+                # Save what we have so far
+                if processed_chunks:
+                    current_processed = concatenate_datasets(processed_chunks)
+                    self._save_chunk_progress(current_processed, split_name, chunk_num - 1)
+                
+                # Re-raise the error
+                raise e
+        
+        # Combine all chunks
+        if processed_chunks:
+            final_dataset = concatenate_datasets(processed_chunks)
+            self.logger.info(f"Completed processing {split_name}: {len(final_dataset)} samples")
+            return final_dataset
+        else:
+            self.logger.warning(f"No samples were successfully processed for {split_name}")
+            return None
+
+    def _save_chunk_progress(self, dataset, split_name, chunk_num):
+        """Save progress after processing each chunk."""
+        try:
+            progress_dir = self.output_dir / f"{self.processor_name}_progress"
+            progress_dir.mkdir(exist_ok=True)
+            
+            progress_file = progress_dir / f"{split_name}_chunk_{chunk_num}"
+            dataset.save_to_disk(str(progress_file))
+            
+            self.logger.info(f"Saved progress for {split_name} chunk {chunk_num} to {progress_file}")
+        except Exception as e:
+            self.logger.warning(f"Could not save chunk progress: {e}")
 
     def _save_dataset(self) -> Dict[str, str]:
         """Save the processed dataset to disk using HuggingFace datasets."""

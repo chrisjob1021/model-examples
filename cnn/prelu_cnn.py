@@ -397,15 +397,12 @@ ImageFile.LOAD_TRUNCATED_IMAGES = True
 # -------------------------------------------------------
 def preprocess_images(examples):
     """Preprocess images for ImageNet."""
-    images = []
+    pixel_values = []
+    labels = []
     
     # ImageNet normalization values (standard for pretrained models)
     mean = [0.485, 0.456, 0.406]
     std = [0.229, 0.224, 0.225]
-    
-    pixel_values = []
-    ok_flags = []
-    labels = []
 
     for i, image in enumerate(examples['image']):  # ImageNet uses 'image' column
         try:
@@ -461,20 +458,15 @@ def preprocess_images(examples):
             # Only add image and corresponding label if processing succeeded
             pixel_values.append(image.numpy())
             labels.append(examples['label'][i])
-            ok_flags.append(True)
+            
         except Exception as e:
             # Skip this image if any error occurs (including UTF-8 encoding errors)
-            print(f"Warning: Skipping image due to error: {type(e).__name__}: {e}")
-            print(f"Image path: {examples['image'][i]}")
-
-            pixel_values.append(torch.zeros(3, 224, 224).numpy())
-            labels.append(-100)
-            ok_flags.append(False)
+            print(f"Warning: Skipping image {i} due to error: {type(e).__name__}: {e}")
+            # Don't add anything to pixel_values or labels - this effectively skips the image
 
     return {
         'pixel_values': pixel_values,
-        'labels': labels,
-        'ok_flags': ok_flags
+        'labels': labels
     }
 
 # -------------------------------------------------------

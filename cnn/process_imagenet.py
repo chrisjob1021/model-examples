@@ -39,7 +39,9 @@ def main():
         },
         num_threads=2,
         start_index=None,  # Start from this position to reproduce the error
+        chunk_size=50000,  # Process in smaller chunks to prevent resource exhaustion
         trust_remote_code=True,       # Trust remote code for dataset loading
+        # download_mode="force_redownload",  # Force redownload of the dataset
     )
     
     print(f"✅ DatasetProcessor created successfully")
