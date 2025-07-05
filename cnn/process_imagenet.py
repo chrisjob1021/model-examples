@@ -52,9 +52,9 @@ def main():
         preprocess_fn=preprocess_images,
         processor_name="imagenet_processor",
         split_limits={
-            "train": 100000,
-            "validation": 0,
-            "test": 0
+            "train": None,
+            "validation": None,
+            "test": None
         },
         # PERFORMANCE OPTIMIZATIONS:
         num_threads=2,
