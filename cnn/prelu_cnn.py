@@ -396,13 +396,13 @@ ImageFile.LOAD_TRUNCATED_IMAGES = True
 # Data preprocessing functions
 # -------------------------------------------------------
 def preprocess_images(examples):
-    """Preprocess images for ImageNet."""
+    """Preprocess images for ImageNet (optimized for tensor storage)."""
     pixel_values = []
     labels = []
     
     # ImageNet normalization values (standard for pretrained models)
-    mean = [0.485, 0.456, 0.406]
-    std = [0.229, 0.224, 0.225]
+    mean = torch.tensor([0.485, 0.456, 0.406])
+    std = torch.tensor([0.229, 0.224, 0.225])
 
     # Try to access the images - this is where UTF-8 EXIF errors occur
     try:
@@ -442,13 +442,6 @@ def preprocess_images(examples):
             # Safety check: ensure tensor is 3D (HWC format)
             if image.dim() == 2:
                 # If somehow we still have a 2D tensor, convert to RGB by repeating the channel
-                # This line converts a 2D grayscale image tensor to a 3-channel RGB tensor:
-                # 1. unsqueeze(0) adds a dimension at position 0: (H, W) -> (1, H, W)
-                # 2. repeat(3, 1, 1) repeats the single channel 3 times: (1, H, W) -> (3, H, W)
-                #    - First argument (3): repeat the channel dimension 3 times
-                #    - Second argument (1): don't repeat the height dimension
-                #    - Third argument (1): don't repeat the width dimension
-                # Result: grayscale image becomes RGB with identical values in all 3 channels
                 image = image.unsqueeze(0).repeat(3, 1, 1)  # (H, W) -> (3, H, W)
             elif image.dim() == 3:
                 # Rearrange dimensions from Height-Width-Channel (HWC) to Channel-Height-Width (CHW)
@@ -460,13 +453,13 @@ def preprocess_images(examples):
             # Normalize pixel values from [0, 255] range to [0, 1] range
             # Neural networks work better with normalized inputs, and 255.0 ensures float division
             image = image / 255.0
-            for c in range(3):
-                image[c] = (image[c] - mean[c]) / std[c]
-            # After normalization: values typically range from ~[-2.5, 2.5]
-            # This is because: (0 - mean) / std ≈ -2.1 and (1 - mean) / std ≈ 2.6
+            
+            # Apply ImageNet normalization using tensor operations (much faster!)
+            image = (image - mean.view(3, 1, 1)) / std.view(3, 1, 1)
                 
-            # Only add image and corresponding label if processing succeeded
-            pixel_values.append(image.numpy())
+            # OPTIMIZATION: Keep as tensor instead of converting to numpy!
+            # This eliminates the need for tensor->numpy->tensor conversion during training
+            pixel_values.append(image)  # Keep as tensor for faster indexing
             labels.append(labels_list[i])
             
         except Exception as e:
@@ -515,13 +508,18 @@ class CNNTrainer(Trainer):
         pixel_values = inputs["pixel_values"]
         labels = inputs["labels"]
 
-        # Convert pixel_values to tensor if it's not already
+        # OPTIMIZED: Handle tensor format efficiently
         if not isinstance(pixel_values, torch.Tensor):
             if isinstance(pixel_values, list):
-                # Convert list of tensors to batch tensor
-                pixel_values = torch.stack(pixel_values)
+                # Check if list contains tensors (optimized format) or numpy arrays (legacy format)
+                if len(pixel_values) > 0 and isinstance(pixel_values[0], torch.Tensor):
+                    # Optimized format: list of tensors -> stack directly
+                    pixel_values = torch.stack(pixel_values)
+                else:
+                    # Legacy format: list of numpy arrays -> convert to tensors first
+                    pixel_values = torch.stack([torch.from_numpy(arr) if isinstance(arr, np.ndarray) else arr for arr in pixel_values])
             else:
-                # Convert numpy array to tensor
+                # Convert numpy array to tensor (legacy format)
                 pixel_values = torch.from_numpy(pixel_values)
 
         # Convert labels to tensor if it's not already
