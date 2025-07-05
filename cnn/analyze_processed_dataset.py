@@ -21,7 +21,7 @@ def analyze_processed_dataset():
     # Load original dataset for comparison
     print("📥 Loading original dataset for alignment check...")
     try:
-        original_dataset = load_dataset("imagenet-1k", trust_remote_code=True)
+        original_dataset = load_dataset("imagenet-1k", trust_remote_code=True, cache_dir=None)
         print("✅ Original dataset loaded successfully")
     except Exception as e:
         print(f"⚠️  Could not load original dataset: {e}")

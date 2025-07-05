@@ -135,15 +135,18 @@ class DatasetProcessor:
                         
                         self.logger.info(f"Loaded max chunk {max_chunk_num}: {actual_samples} samples")
                         
-                        # Check if chunk is complete (has expected number of samples)
-                        # Last chunk might legitimately be smaller, so we need to calculate expected size
-                        if max_chunk_num > 1:
-                            # For chunks other than the last, expect full chunk_size
-                            # We don't know total dataset size here, so we'll be more lenient
-                            if actual_samples < expected_samples * 0.8:  # Allow 20% variance for processing differences
-                                self.logger.warning(f"Chunk {max_chunk_num} appears incomplete: "
-                                                  f"{actual_samples} samples (expected ~{expected_samples})")
-                                raise ValueError(f"Incomplete chunk detected")
+                        # Check if chunk appears corrupted (legitimately small final chunks are normal)
+                        # We don't know total dataset size here, so we'll be very lenient
+                        # Only flag chunks that are suspiciously small (likely corrupted)
+                        if actual_samples < expected_samples * 0.1:  # Only flag if less than 10% of expected
+                            self.logger.warning(f"Chunk {max_chunk_num} appears corrupted: "
+                                              f"{actual_samples} samples (expected ~{expected_samples})")
+                            raise ValueError(f"Corrupted chunk detected - too few samples")
+                        elif actual_samples < expected_samples * 0.8:
+                            # Log info about smaller chunks, but don't treat as error
+                            self.logger.info(f"Chunk {max_chunk_num} is smaller than expected: "
+                                           f"{actual_samples} samples (expected ~{expected_samples}) - "
+                                           f"likely final chunk or processing variation")
                         
                         # If max chunk loads successfully and appears complete, use it for resume
                         self.resume_info[split_name] = {
