@@ -3,6 +3,7 @@
 
 import torch
 import logging
+import argparse
 from prelu_cnn import preprocess_images
 
 # Import from shared_utils package
@@ -16,10 +17,23 @@ logging.basicConfig(
 )
 
 def main():
-    """Process ImageNet-1k dataset using DatasetProcessor."""
+    """Main function with argument parsing."""
     
-    print("🚀 Processing ImageNet-1k dataset using DatasetProcessor")
-    print("=" * 60)
+    parser = argparse.ArgumentParser(description="Process ImageNet-1k dataset")
+    parser.add_argument(
+        "--concatenate-only", 
+        action="store_true",
+        help="Only concatenate existing progress chunks, don't process new data"
+    )
+    
+    args = parser.parse_args()
+    
+    if args.concatenate_only:
+        print("🔄 Concatenating existing progress chunks using DatasetProcessor...")
+        print("=" * 60)
+    else:
+        print("🚀 Processing ImageNet-1k dataset using DatasetProcessor")
+        print("=" * 60)
     
     # Check CUDA availability
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -28,9 +42,6 @@ def main():
     if device.type == "cuda":
         print(f"GPU: {torch.cuda.get_device_name()}")
         print(f"GPU Memory: {torch.cuda.get_device_properties(0).total_memory / 1e9:.1f} GB")
-    
-    # Define preprocessing function
-    print("📝 Setting up preprocessing function...")
     
     # Create DatasetProcessor for ImageNet-1k
     print("🔄 Creating DatasetProcessor for ImageNet-1k...")
@@ -50,6 +61,8 @@ def main():
         chunk_size=250000,
         batch_size=200,
         trust_remote_code=True,
+        cache_dir=None,  # Don't use cache
+        concatenate_only=args.concatenate_only,  # Skip dataset loading if concatenate-only
         # download_mode="force_redownload",  # Force redownload of the dataset
     )
     
@@ -57,13 +70,21 @@ def main():
     print(f"📁 Output directory: {processor.output_dir}")
     print(f"📊 Split limits: {processor.split_limits}")
     
-    # Process the dataset
-    print(f"\n🔄 Processing ImageNet-1k dataset...")
+    if args.concatenate_only:
+        print(f"\n🔗 Concatenate-only mode: will skip dataset loading and only combine existing chunks")
+        print(f"💡 No processing of original ImageNet data will be performed")
+    else:
+        print(f"\n🔄 Processing ImageNet-1k dataset...")
+        print(f"📥 This will load the original dataset and apply preprocessing")
     
     try:
         results = processor.process()
         
-        print(f"\n✅ Dataset processing completed successfully!")
+        if args.concatenate_only:
+            print(f"\n✅ Chunk concatenation completed successfully!")
+        else:
+            print(f"\n✅ Dataset processing completed successfully!")
+            
         print(f"📊 Processing Results:")
         print(f"  Saved files: {results}")
         
@@ -91,7 +112,10 @@ def main():
         print(f"❌ Error processing dataset: {e}")
         return
     
-    print(f"\n✅ ImageNet-1k processing completed successfully!")
+    if args.concatenate_only:
+        print(f"\n✅ ImageNet-1k chunk concatenation completed successfully!")
+    else:
+        print(f"\n✅ ImageNet-1k processing completed successfully!")
     print(f"📁 Check {processor.output_dir} for processed dataset files")
 
 if __name__ == "__main__":

@@ -32,6 +32,7 @@ class DatasetProcessor:
         start_index: Optional[int] = None,
         chunk_size: int = 50000,  # Process in chunks to prevent resource exhaustion
         batch_size: int = 500,    # Batch size for map operations (increased from 200)
+        concatenate_only: bool = False,  # Only concatenate existing chunks, don't load original dataset
         **load_dataset_kwargs
     ):
         """
@@ -47,6 +48,7 @@ class DatasetProcessor:
             start_index: Index to start processing from (for debugging specific positions)
             chunk_size: Number of samples to process in each chunk
             batch_size: Batch size for map operations (increased from 200)
+            concatenate_only: Only concatenate existing chunks, don't load original dataset
             **load_dataset_kwargs: Additional arguments to pass to load_dataset
         """
         self.dataset_name = dataset_name
@@ -58,28 +60,35 @@ class DatasetProcessor:
         self.start_index = start_index
         self.chunk_size = chunk_size
         self.batch_size = batch_size
+        self.concatenate_only = concatenate_only
         self.load_dataset_kwargs = load_dataset_kwargs
         
-        # Load the dataset using load_dataset
+        # Setup logging
         self.logger = logging.getLogger(f"{self.__class__.__name__}")
         self.logger.setLevel(logging.INFO)
-        self.logger.info(f"Loading dataset: {dataset_name}")
-        self.logger.info(f"Using {self.num_threads} threads for processing")
         
-        # Handle UTF-8 encoding errors that can occur with large datasets like ImageNet
-        try:
-            self.dataset = load_dataset(dataset_name, **load_dataset_kwargs)
-        except UnicodeDecodeError as e:
-            self.logger.warning(f"UTF-8 decode error encountered: {e}")
-            self.logger.info("Retrying with ignore_verifications=True to handle encoding issues...")
+        if self.concatenate_only:
+            self.logger.info("Concatenate-only mode: skipping original dataset loading")
+            self.dataset = None
+        else:
+            # Load the dataset using load_dataset
+            self.logger.info(f"Loading dataset: {dataset_name}")
+            self.logger.info(f"Using {self.num_threads} threads for processing")
+            
+            # Handle UTF-8 encoding errors that can occur with large datasets like ImageNet
             try:
-                # Retry with ignore_verifications to skip problematic files
-                self.dataset = load_dataset(dataset_name, ignore_verifications=True, **load_dataset_kwargs)
-                self.logger.info("Successfully loaded dataset with ignore_verifications=True")
-            except Exception as e2:
-                self.logger.error(f"Failed to load dataset even with ignore_verifications: {e2}")
-                raise RuntimeError(f"Unable to load dataset {dataset_name} due to encoding issues. "
-                                 f"Original error: {e}. Secondary error: {e2}")
+                self.dataset = load_dataset(dataset_name, **load_dataset_kwargs)
+            except UnicodeDecodeError as e:
+                self.logger.warning(f"UTF-8 decode error encountered: {e}")
+                self.logger.info("Retrying with ignore_verifications=True to handle encoding issues...")
+                try:
+                    # Retry with ignore_verifications to skip problematic files
+                    self.dataset = load_dataset(dataset_name, ignore_verifications=True, **load_dataset_kwargs)
+                    self.logger.info("Successfully loaded dataset with ignore_verifications=True")
+                except Exception as e2:
+                    self.logger.error(f"Failed to load dataset even with ignore_verifications: {e2}")
+                    raise RuntimeError(f"Unable to load dataset {dataset_name} due to encoding issues. "
+                                     f"Original error: {e}. Secondary error: {e2}")
         
         # Create output directory if it doesn't exist
         self.output_dir.mkdir(parents=True, exist_ok=True)
@@ -194,6 +203,39 @@ class DatasetProcessor:
 
     def _apply_preprocessing(self) -> None:
         """Apply preprocessing function to the dataset using HuggingFace datasets."""
+        if self.concatenate_only:
+            self.logger.info("Concatenate-only mode: loading and combining existing chunks")
+            
+            # Process each split using the single concatenation method
+            progress_dir = self.output_dir / f"{self.processor_name}_progress"
+            
+            if not progress_dir.exists():
+                self.logger.error(f"Progress directory not found: {progress_dir}")
+                self.logger.error("Cannot concatenate chunks - no progress files exist")
+                return
+            
+            self.logger.info(f"Loading existing chunks from: {progress_dir}")
+            self.processed_dataset = DatasetDict()
+            
+            for split_name in ["train", "validation", "test"]:
+                self.logger.info(f"Processing {split_name} split...")
+                
+                split_dataset = self._concatenate_all_chunks_for_split(split_name)
+                
+                if split_dataset is not None:
+                    self.processed_dataset[split_name] = split_dataset
+                    
+                    # Show sample structure
+                    if len(split_dataset) > 0:
+                        sample = split_dataset[0]
+                        self.logger.info(f"Sample structure: {list(sample.keys())}")
+            
+            if not self.processed_dataset:
+                self.logger.error("No datasets were successfully concatenated")
+            else:
+                self.logger.info(f"Concatenation completed for {len(self.processed_dataset)} splits")
+            return
+            
         self.logger.info("Applying preprocessing function...")
         
         # Centralize map arguments
@@ -282,29 +324,9 @@ class DatasetProcessor:
                         if start_sample >= total_samples:
                             self.logger.info(f"{split_name} already fully processed - loading all chunks for combination")
                             
-                            # Load all chunks from disk for final combination
-                            progress_dir = self.output_dir / f"{self.processor_name}_progress"
-                            all_chunks = []
-                            
-                            for chunk_num in range(1, latest_chunk + 1):
-                                chunk_file = progress_dir / f"{split_name}_chunk_{chunk_num}"
-                                
-                                if chunk_file.exists():
-                                    try:
-                                        chunk_dataset = load_from_disk(str(chunk_file))
-                                        if len(chunk_dataset) > 0:
-                                            all_chunks.append(chunk_dataset)
-                                            self.logger.info(f"Loaded chunk {chunk_num}: {len(chunk_dataset)} samples")
-                                    except Exception as e:
-                                        self.logger.error(f"Failed to load chunk {chunk_num}: {e}")
-                                        continue
-                            
-                            if all_chunks:
-                                final_dataset = concatenate_datasets(all_chunks)
-                                self.logger.info(f"Combined {len(all_chunks)} chunks: {len(final_dataset)} total samples")
-                                return final_dataset
-                            else:
-                                return chunk_dataset
+                            # Use consolidated concatenation method
+                            final_dataset = self._concatenate_all_chunks_for_split(split_name)
+                            return final_dataset if final_dataset is not None else chunk_dataset
                         
                         self.logger.info(f"Will continue processing from chunk {start_chunk} (sample {start_sample})")
                     else:
@@ -413,81 +435,17 @@ class DatasetProcessor:
                 # Re-raise the error
                 raise e
         
-        # Combine all chunks
+        # Combine all chunks using consolidated method
         if processed_chunks:
-            # Load all existing chunks from disk for final combination
-            progress_dir = self.output_dir / f"{self.processor_name}_progress"
-            all_chunks = []
+            self.logger.info(f"Processing completed - combining all chunks for {split_name}")
+            final_dataset = self._concatenate_all_chunks_for_split(split_name)
             
-            # If we resumed, load all chunks from disk
-            if split_name in self.resume_info:
-                resume_chunk = self.resume_info[split_name]['latest_chunk']
-                self.logger.info(f"Loading all chunks from 1 to {resume_chunk} for final combination")
-                
-                # Load all chunks from 1 to resume_chunk
-                for chunk_num in range(1, resume_chunk + 1):
-                    chunk_file = progress_dir / f"{split_name}_chunk_{chunk_num}"
-                    
-                    if chunk_file.exists():
-                        try:
-                            chunk_dataset = load_from_disk(str(chunk_file))
-                            if len(chunk_dataset) > 0:
-                                all_chunks.append(chunk_dataset)
-                                self.logger.info(f"Loaded chunk {chunk_num}: {len(chunk_dataset)} samples")
-                            else:
-                                self.logger.warning(f"Skipping empty chunk {chunk_num}")
-                        except Exception as e:
-                            self.logger.error(f"Failed to load chunk {chunk_num}: {e}")
-                            continue
-                    else:
-                        self.logger.error(f"Expected chunk file missing: {chunk_file}")
-                        continue
-                
-                # Add any newly processed chunks (these are already in memory)
-                new_chunks = processed_chunks[1:]  # Skip the first chunk which is the resumed one
-                if new_chunks:
-                    all_chunks.extend(new_chunks)
-                    self.logger.info(f"Added {len(new_chunks)} newly processed chunks")
-                
-                if all_chunks:
-                    final_dataset = concatenate_datasets(all_chunks)
-                    total_samples_final = len(final_dataset)
-                    self.logger.info(f"Completed processing {split_name}: {total_samples_final} samples from {len(all_chunks)} chunks")
-                    return final_dataset
-                else:
-                    self.logger.warning(f"No valid chunks found for {split_name}")
-                    return None
+            if final_dataset is not None:
+                self.logger.info(f"Completed processing {split_name}: {len(final_dataset)} total samples")
+                return final_dataset
             else:
-                # No resume - load all chunks from disk to create cumulative dataset
-                max_chunk = len(processed_chunks)
-                self.logger.info(f"Loading all chunks from 1 to {max_chunk} for final combination")
-                
-                for chunk_num in range(1, max_chunk + 1):
-                    chunk_file = progress_dir / f"{split_name}_chunk_{chunk_num}"
-                    
-                    if chunk_file.exists():
-                        try:
-                            chunk_dataset = load_from_disk(str(chunk_file))
-                            if len(chunk_dataset) > 0:
-                                all_chunks.append(chunk_dataset)
-                                self.logger.info(f"Loaded chunk {chunk_num}: {len(chunk_dataset)} samples")
-                            else:
-                                self.logger.warning(f"Skipping empty chunk {chunk_num}")
-                        except Exception as e:
-                            self.logger.error(f"Failed to load chunk {chunk_num}: {e}")
-                            continue
-                    else:
-                        self.logger.error(f"Expected chunk file missing: {chunk_file}")
-                        continue
-                
-                if all_chunks:
-                    final_dataset = concatenate_datasets(all_chunks)
-                    total_samples_final = len(final_dataset)
-                    self.logger.info(f"Completed processing {split_name}: {total_samples_final} samples from {len(all_chunks)} chunks")
-                    return final_dataset
-                else:
-                    self.logger.warning(f"No valid chunks found for {split_name}")
-                    return None
+                self.logger.warning(f"No valid chunks found for {split_name}")
+                return None
         else:
             self.logger.warning(f"No samples were successfully processed for {split_name}")
             return None
@@ -588,6 +546,71 @@ class DatasetProcessor:
         
         self.logger.info(f"Saved dataset to: {filepath}")
         return saved_files
+
+    def _concatenate_all_chunks_for_split(self, split_name):
+        """Concatenate all existing chunks for a specific split."""
+        progress_dir = self.output_dir / f"{self.processor_name}_progress"
+        
+        if not progress_dir.exists():
+            self.logger.warning(f"Progress directory not found: {progress_dir}")
+            return None
+        
+        # Find chunk files for this split
+        chunk_files = list(progress_dir.glob(f"{split_name}_chunk_*"))
+        
+        if not chunk_files:
+            self.logger.info(f"No chunks found for {split_name}")
+            return None
+        
+        # Sort chunks by number
+        chunk_info = []
+        for chunk_file in chunk_files:
+            try:
+                chunk_num = int(chunk_file.name.split('_chunk_')[1])
+                chunk_info.append((chunk_num, chunk_file))
+            except (IndexError, ValueError):
+                self.logger.warning(f"Invalid chunk name: {chunk_file.name}")
+                continue
+        
+        if not chunk_info:
+            self.logger.warning(f"No valid chunks found for {split_name}")
+            return None
+        
+        # Sort by chunk number
+        chunk_info.sort(key=lambda x: x[0])
+        chunk_numbers = [num for num, _ in chunk_info]
+        
+        self.logger.info(f"Found {split_name} chunks: {chunk_numbers}")
+        
+        # Load and concatenate chunks
+        chunks = []
+        total_samples = 0
+        
+        for chunk_num, chunk_file in chunk_info:
+            try:
+                self.logger.info(f"Loading {split_name} chunk {chunk_num}...")
+                chunk_dataset = load_from_disk(str(chunk_file))
+                chunk_samples = len(chunk_dataset)
+                
+                if chunk_samples > 0:
+                    chunks.append(chunk_dataset)
+                    total_samples += chunk_samples
+                    self.logger.info(f"Loaded {chunk_samples:,} samples from chunk {chunk_num}")
+                else:
+                    self.logger.warning(f"Chunk {chunk_num} is empty")
+                    
+            except Exception as e:
+                self.logger.error(f"Failed to load chunk {chunk_num}: {e}")
+                continue
+        
+        if chunks:
+            self.logger.info(f"Concatenating {len(chunks)} chunks for {split_name}...")
+            final_dataset = concatenate_datasets(chunks)
+            self.logger.info(f"Successfully concatenated {split_name}: {len(final_dataset):,} total samples")
+            return final_dataset
+        else:
+            self.logger.warning(f"No valid chunks loaded for {split_name}")
+            return None
 
     def process(self) -> Dict[str, str]:
         """
