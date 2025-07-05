@@ -192,7 +192,8 @@ class DatasetProcessor:
             'batched': True,
             'batch_size': self.batch_size,
             'num_proc': self.num_threads,
-            'load_from_cache_file': False,
+            'load_from_cache_file': False,  # Disable caching to prevent huge cache files
+            'cache_file_name': None,        # Don't create cache files
         }
 
         if isinstance(self.dataset, DatasetDict):
@@ -359,14 +360,12 @@ class DatasetProcessor:
                 
             except Exception as e:
                 self.logger.error(f"Error processing chunk {chunk_num}: {e}")
-                self.logger.info("Saving progress before handling error...")
+                self.logger.info("Error occurred - progress has already been saved for successful chunks")
                 
-                # Save what we have so far - save only the last successful chunk
-                if processed_chunks:
-                    # Save the last successfully processed chunk
-                    last_chunk = processed_chunks[-1]
-                    self._save_chunk_progress(last_chunk, split_name, chunk_num - 1)
-                    self.logger.info(f"Saved last successful chunk: {len(last_chunk)} samples")
+                # Don't try to save anything here - successful chunks were already saved
+                # The failed chunk should not be saved, and previous chunks are already on disk
+                self.logger.info(f"Chunks 1-{chunk_num-1} were already saved successfully")
+                self.logger.info(f"Chunk {chunk_num} failed and will be skipped")
                 
                 # Re-raise the error
                 raise e
@@ -457,6 +456,12 @@ class DatasetProcessor:
             progress_dir.mkdir(exist_ok=True)
             
             progress_file = progress_dir / f"{split_name}_chunk_{chunk_num}"
+            
+            # Check if chunk already exists (shouldn't happen in normal operation)
+            if progress_file.exists():
+                self.logger.warning(f"Chunk {chunk_num} already exists at {progress_file}, skipping save")
+                return
+            
             dataset.save_to_disk(str(progress_file))
             
             self.logger.info(f"Saved progress for {split_name} chunk {chunk_num} to {progress_file}")
