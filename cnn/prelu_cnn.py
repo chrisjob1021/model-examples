@@ -528,6 +528,11 @@ class CNNTrainer(Trainer):
         if not isinstance(labels, torch.Tensor):
             labels = torch.tensor(labels, dtype=torch.long)
 
+        # Move tensors to same device as model
+        model_device = next(model.parameters()).device
+        pixel_values = pixel_values.to(model_device)
+        labels = labels.to(model_device)
+
         outputs = model(pixel_values)
         loss_fn = nn.CrossEntropyLoss()
         loss = loss_fn(outputs, labels)

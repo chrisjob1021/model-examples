@@ -55,6 +55,16 @@ def main():
         num_classes=1000
     )
     
+    # Move model to GPU
+    model = model.to(device)
+    print(f"✅ Model moved to device: {device}")
+    
+    # Verify model is on GPU
+    if next(model.parameters()).device != device:
+        print(f"❌ Warning: Model parameters are on {next(model.parameters()).device}, expected {device}")
+    else:
+        print(f"✅ Model parameters confirmed on {device}")
+    
     # Count parameters
     total_params = sum(p.numel() for p in model.parameters())
     trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
