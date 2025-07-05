@@ -4,7 +4,7 @@ from datetime import datetime
 import logging
 import os
 
-from datasets import DatasetDict, load_dataset, concatenate_datasets
+from datasets import DatasetDict, load_dataset, concatenate_datasets, load_from_disk
 
 class DatasetProcessor:
     """
@@ -24,6 +24,7 @@ class DatasetProcessor:
         num_threads: Optional[int] = None,
         start_index: Optional[int] = None,
         chunk_size: int = 50000,  # Process in chunks to prevent resource exhaustion
+        batch_size: int = 500,    # Batch size for map operations (increased from 200)
         **load_dataset_kwargs
     ):
         """
@@ -38,6 +39,7 @@ class DatasetProcessor:
             num_threads: Number of threads to use for processing (defaults to os.cpu_count())
             start_index: Index to start processing from (for debugging specific positions)
             chunk_size: Number of samples to process in each chunk
+            batch_size: Batch size for map operations (increased from 200)
             **load_dataset_kwargs: Additional arguments to pass to load_dataset
         """
         self.dataset_name = dataset_name
@@ -48,6 +50,7 @@ class DatasetProcessor:
         self.num_threads = num_threads or os.cpu_count()
         self.start_index = start_index
         self.chunk_size = chunk_size
+        self.batch_size = batch_size
         self.load_dataset_kwargs = load_dataset_kwargs
         
         # Load the dataset using load_dataset
@@ -80,6 +83,104 @@ class DatasetProcessor:
         
         # Initialize processed dataset
         self.processed_dataset = None
+        
+        # Check for existing progress to resume from
+        self.resume_info = {}
+        if self.chunk_size > 0:
+            self._check_resume_progress()
+
+    def _check_resume_progress(self):
+        """Check for existing chunk progress and determine where to resume from."""
+        progress_dir = self.output_dir / f"{self.processor_name}_progress"
+        
+        if not progress_dir.exists():
+            self.logger.info("No previous progress found - starting fresh")
+            return
+        
+        self.logger.info(f"Checking for previous progress in {progress_dir}")
+        
+        # Find all chunk files for each split
+        for split_name in ["train", "validation", "test"]:
+            chunk_files = list(progress_dir.glob(f"{split_name}_chunk_*"))
+            
+            if chunk_files:
+                # Extract chunk numbers and sort them
+                chunk_info = []
+                for chunk_file in chunk_files:
+                    try:
+                        chunk_num = int(chunk_file.name.split('_chunk_')[1])
+                        chunk_info.append((chunk_num, chunk_file))
+                    except (IndexError, ValueError):
+                        continue
+                
+                if chunk_info:
+                    # Sort by chunk number and find the maximum
+                    chunk_info.sort(key=lambda x: x[0])
+                    max_chunk_num = max(chunk_num for chunk_num, _ in chunk_info)
+                    max_chunk_file = next(chunk_file for chunk_num, chunk_file in chunk_info if chunk_num == max_chunk_num)
+                    
+                    # Try to load the maximum chunk first
+                    try:
+                        from datasets import load_from_disk
+                        test_dataset = load_from_disk(str(max_chunk_file))
+                        expected_samples = self.chunk_size
+                        actual_samples = len(test_dataset)
+                        
+                        self.logger.info(f"Loaded max chunk {max_chunk_num}: {actual_samples} samples")
+                        
+                        # Check if chunk is complete (has expected number of samples)
+                        # Last chunk might legitimately be smaller, so we need to calculate expected size
+                        if max_chunk_num > 1:
+                            # For chunks other than the last, expect full chunk_size
+                            # We don't know total dataset size here, so we'll be more lenient
+                            if actual_samples < expected_samples * 0.8:  # Allow 20% variance for processing differences
+                                self.logger.warning(f"Chunk {max_chunk_num} appears incomplete: "
+                                                  f"{actual_samples} samples (expected ~{expected_samples})")
+                                raise ValueError(f"Incomplete chunk detected")
+                        
+                        # If max chunk loads successfully and appears complete, use it for resume
+                        self.resume_info[split_name] = {
+                            'latest_chunk': max_chunk_num,
+                            'chunk_files': [max_chunk_file]
+                        }
+                        self.logger.info(f"Will resume from chunk {max_chunk_num + 1}")
+                        
+                    except Exception as e:
+                        self.logger.warning(f"Failed to load or validate max chunk {max_chunk_num}: {e}")
+                        
+                        # Delete the corrupted/incomplete max chunk
+                        try:
+                            import shutil
+                            shutil.rmtree(max_chunk_file)
+                            self.logger.info(f"Deleted corrupted/incomplete chunk: {max_chunk_file}")
+                        except Exception as delete_error:
+                            self.logger.warning(f"Could not delete corrupted chunk {max_chunk_file}: {delete_error}")
+                        
+                        # Try to load the previous chunk
+                        if len(chunk_info) > 1:
+                            prev_chunk_num = max_chunk_num - 1
+                            prev_chunk_file = next((chunk_file for chunk_num, chunk_file in chunk_info if chunk_num == prev_chunk_num), None)
+                            
+                            if prev_chunk_file:
+                                try:
+                                    test_dataset = load_from_disk(str(prev_chunk_file))
+                                    self.logger.info(f"Successfully loaded previous chunk {prev_chunk_num}: {len(test_dataset)} samples")
+                                    
+                                    # Use the previous chunk for resume (will reprocess the corrupted chunk)
+                                    self.resume_info[split_name] = {
+                                        'latest_chunk': prev_chunk_num,
+                                        'chunk_files': [prev_chunk_file]
+                                    }
+                                    self.logger.info(f"Will resume from chunk {prev_chunk_num + 1} (reprocessing corrupted chunk)")
+                                    
+                                except Exception as e2:
+                                    self.logger.warning(f"Failed to load previous chunk {prev_chunk_num}: {e2}")
+                                    # Don't try any other chunks - just skip this split
+        
+        if self.resume_info:
+            self.logger.info(f"Resume info: {list(self.resume_info.keys())}")
+        else:
+            self.logger.info("No valid progress chunks found")
 
     def _apply_preprocessing(self) -> None:
         """Apply preprocessing function to the dataset using HuggingFace datasets."""
@@ -89,7 +190,7 @@ class DatasetProcessor:
         map_kwargs = {
             'function': self.preprocess_fn,
             'batched': True,
-            'batch_size': 200,
+            'batch_size': self.batch_size,
             'num_proc': self.num_threads,
             'load_from_cache_file': False,
         }
@@ -103,6 +204,12 @@ class DatasetProcessor:
                 # Apply split limit if specified
                 if split_name in self.split_limits and self.split_limits[split_name] is not None:
                     limit = self.split_limits[split_name]
+                    
+                    # Skip split if limit is 0
+                    if limit == 0:
+                        self.logger.info(f"Skipping {split_name} (limit set to 0)")
+                        continue
+                        
                     self.logger.info(f"Limiting {split_name} to {limit} features")
                     split_dataset = split_dataset.select(range(min(limit, len(split_dataset))))
                 
@@ -112,9 +219,16 @@ class DatasetProcessor:
                     split_dataset = split_dataset.select(range(self.start_index, len(split_dataset)))
                 
                 # Process in chunks to prevent resource exhaustion
-                self.processed_dataset[split_name] = self._process_split_in_chunks(
+                processed_split = self._process_split_in_chunks(
                     split_dataset, split_name, map_kwargs
                 )
+                
+                # Only add to processed_dataset if processing was successful
+                if processed_split is not None and len(processed_split) > 0:
+                    self.processed_dataset[split_name] = processed_split
+                    self.logger.info(f"Successfully processed {split_name}: {len(processed_split)} samples")
+                else:
+                    self.logger.warning(f"Skipping {split_name} - no valid samples processed")
         else:
             # Process single dataset in chunks
             self.processed_dataset = self._process_split_in_chunks(
@@ -127,15 +241,80 @@ class DatasetProcessor:
         """Process a dataset split in chunks to prevent resource exhaustion."""
         import gc
         import psutil
-        from datasets import concatenate_datasets
+        from datasets import concatenate_datasets, load_from_disk
         
         total_samples = len(dataset)
         processed_chunks = []
         
+        # Check if we can resume from previous progress
+        start_chunk = 1
+        if split_name in self.resume_info:
+            latest_chunk = self.resume_info[split_name]['latest_chunk']
+            chunk_files = self.resume_info[split_name]['chunk_files']
+            
+            self.logger.info(f"Resuming {split_name} from chunk {latest_chunk}")
+            
+            # Load only the latest chunk
+            if len(chunk_files) == 1:
+                chunk_file = chunk_files[0]
+                try:
+                    chunk_dataset = load_from_disk(str(chunk_file))
+                    if len(chunk_dataset) > 0:
+                        processed_chunks.append(chunk_dataset)
+                        self.logger.info(f"Loaded latest chunk {latest_chunk}: {len(chunk_dataset)} samples")
+                        
+                        # Calculate where to start processing (continue from after the loaded chunk)
+                        start_chunk = latest_chunk + 1
+                        start_sample = latest_chunk * self.chunk_size
+                        
+                        # Check if we still have more samples to process
+                        if start_sample >= total_samples:
+                            self.logger.info(f"{split_name} already fully processed - loading all chunks for combination")
+                            
+                            # Load all chunks from disk for final combination
+                            progress_dir = self.output_dir / f"{self.processor_name}_progress"
+                            all_chunks = []
+                            
+                            for chunk_num in range(1, latest_chunk + 1):
+                                chunk_file = progress_dir / f"{split_name}_chunk_{chunk_num}"
+                                
+                                if chunk_file.exists():
+                                    try:
+                                        chunk_dataset = load_from_disk(str(chunk_file))
+                                        if len(chunk_dataset) > 0:
+                                            all_chunks.append(chunk_dataset)
+                                            self.logger.info(f"Loaded chunk {chunk_num}: {len(chunk_dataset)} samples")
+                                    except Exception as e:
+                                        self.logger.error(f"Failed to load chunk {chunk_num}: {e}")
+                                        continue
+                            
+                            if all_chunks:
+                                final_dataset = concatenate_datasets(all_chunks)
+                                self.logger.info(f"Combined {len(all_chunks)} chunks: {len(final_dataset)} total samples")
+                                return final_dataset
+                            else:
+                                return chunk_dataset
+                        
+                        self.logger.info(f"Will continue processing from chunk {start_chunk} (sample {start_sample})")
+                    else:
+                        self.logger.warning(f"Latest chunk is empty")
+                        start_chunk = latest_chunk
+                except Exception as e:
+                    self.logger.error(f"Failed to load latest chunk: {e}")
+                    start_chunk = latest_chunk
+            else:
+                self.logger.warning("No chunk files found in resume info")
+                start_chunk = 1
+        else:
+            self.logger.info(f"Starting {split_name} from beginning")
+        
         self.logger.info(f"Processing {split_name} in chunks of {self.chunk_size} samples")
         self.logger.info(f"Total samples to process: {total_samples}")
         
-        for chunk_start in range(0, total_samples, self.chunk_size):
+        # Calculate the starting point for processing
+        start_sample = (start_chunk - 1) * self.chunk_size
+        
+        for chunk_start in range(start_sample, total_samples, self.chunk_size):
             chunk_end = min(chunk_start + self.chunk_size, total_samples)
             chunk_num = chunk_start // self.chunk_size + 1
             total_chunks = (total_samples + self.chunk_size - 1) // self.chunk_size
@@ -161,13 +340,15 @@ class DatasetProcessor:
                 # No need to filter - preprocessing only returns successful images
                 processed_chunks.append(processed_chunk)
                 
-                # Save progress after each chunk
-                if processed_chunks:
-                    current_processed = concatenate_datasets(processed_chunks)
-                    self._save_chunk_progress(current_processed, split_name, chunk_num)
+                # Save progress after each chunk - save only the new chunk (not cumulative)
+                if processed_chunk:
+                    self._save_chunk_progress(processed_chunk, split_name, chunk_num)
                     
-                    self.logger.info(f"Chunk {chunk_num} completed: {len(processed_chunk)} samples processed")
-                    self.logger.info(f"Total processed so far: {len(current_processed)} samples")
+                    self.logger.info(f"Chunk {chunk_num} completed: {len(processed_chunk)} new samples processed")
+                    
+                    # Calculate total processed including resumed chunks
+                    total_processed = sum(len(chunk) for chunk in processed_chunks)
+                    self.logger.info(f"Total processed so far: {total_processed} samples")
                 
                 # Force garbage collection after each chunk
                 gc.collect()
@@ -180,19 +361,91 @@ class DatasetProcessor:
                 self.logger.error(f"Error processing chunk {chunk_num}: {e}")
                 self.logger.info("Saving progress before handling error...")
                 
-                # Save what we have so far
+                # Save what we have so far - save only the last successful chunk
                 if processed_chunks:
-                    current_processed = concatenate_datasets(processed_chunks)
-                    self._save_chunk_progress(current_processed, split_name, chunk_num - 1)
+                    # Save the last successfully processed chunk
+                    last_chunk = processed_chunks[-1]
+                    self._save_chunk_progress(last_chunk, split_name, chunk_num - 1)
+                    self.logger.info(f"Saved last successful chunk: {len(last_chunk)} samples")
                 
                 # Re-raise the error
                 raise e
         
         # Combine all chunks
         if processed_chunks:
-            final_dataset = concatenate_datasets(processed_chunks)
-            self.logger.info(f"Completed processing {split_name}: {len(final_dataset)} samples")
-            return final_dataset
+            # Load all existing chunks from disk for final combination
+            progress_dir = self.output_dir / f"{self.processor_name}_progress"
+            all_chunks = []
+            
+            # If we resumed, load all chunks from disk
+            if split_name in self.resume_info:
+                resume_chunk = self.resume_info[split_name]['latest_chunk']
+                self.logger.info(f"Loading all chunks from 1 to {resume_chunk} for final combination")
+                
+                # Load all chunks from 1 to resume_chunk
+                for chunk_num in range(1, resume_chunk + 1):
+                    chunk_file = progress_dir / f"{split_name}_chunk_{chunk_num}"
+                    
+                    if chunk_file.exists():
+                        try:
+                            chunk_dataset = load_from_disk(str(chunk_file))
+                            if len(chunk_dataset) > 0:
+                                all_chunks.append(chunk_dataset)
+                                self.logger.info(f"Loaded chunk {chunk_num}: {len(chunk_dataset)} samples")
+                            else:
+                                self.logger.warning(f"Skipping empty chunk {chunk_num}")
+                        except Exception as e:
+                            self.logger.error(f"Failed to load chunk {chunk_num}: {e}")
+                            continue
+                    else:
+                        self.logger.error(f"Expected chunk file missing: {chunk_file}")
+                        continue
+                
+                # Add any newly processed chunks (these are already in memory)
+                new_chunks = processed_chunks[1:]  # Skip the first chunk which is the resumed one
+                if new_chunks:
+                    all_chunks.extend(new_chunks)
+                    self.logger.info(f"Added {len(new_chunks)} newly processed chunks")
+                
+                if all_chunks:
+                    final_dataset = concatenate_datasets(all_chunks)
+                    total_samples_final = len(final_dataset)
+                    self.logger.info(f"Completed processing {split_name}: {total_samples_final} samples from {len(all_chunks)} chunks")
+                    return final_dataset
+                else:
+                    self.logger.warning(f"No valid chunks found for {split_name}")
+                    return None
+            else:
+                # No resume - load all chunks from disk to create cumulative dataset
+                max_chunk = len(processed_chunks)
+                self.logger.info(f"Loading all chunks from 1 to {max_chunk} for final combination")
+                
+                for chunk_num in range(1, max_chunk + 1):
+                    chunk_file = progress_dir / f"{split_name}_chunk_{chunk_num}"
+                    
+                    if chunk_file.exists():
+                        try:
+                            chunk_dataset = load_from_disk(str(chunk_file))
+                            if len(chunk_dataset) > 0:
+                                all_chunks.append(chunk_dataset)
+                                self.logger.info(f"Loaded chunk {chunk_num}: {len(chunk_dataset)} samples")
+                            else:
+                                self.logger.warning(f"Skipping empty chunk {chunk_num}")
+                        except Exception as e:
+                            self.logger.error(f"Failed to load chunk {chunk_num}: {e}")
+                            continue
+                    else:
+                        self.logger.error(f"Expected chunk file missing: {chunk_file}")
+                        continue
+                
+                if all_chunks:
+                    final_dataset = concatenate_datasets(all_chunks)
+                    total_samples_final = len(final_dataset)
+                    self.logger.info(f"Completed processing {split_name}: {total_samples_final} samples from {len(all_chunks)} chunks")
+                    return final_dataset
+                else:
+                    self.logger.warning(f"No valid chunks found for {split_name}")
+                    return None
         else:
             self.logger.warning(f"No samples were successfully processed for {split_name}")
             return None
@@ -210,19 +463,75 @@ class DatasetProcessor:
         except Exception as e:
             self.logger.warning(f"Could not save chunk progress: {e}")
 
+    def _cleanup_progress_files(self):
+        """Clean up progress files after successful completion."""
+        progress_dir = self.output_dir / f"{self.processor_name}_progress"
+        
+        if progress_dir.exists():
+            try:
+                import shutil
+                shutil.rmtree(progress_dir)
+                self.logger.info(f"Cleaned up progress files from {progress_dir}")
+            except Exception as e:
+                self.logger.warning(f"Could not clean up progress files: {e}")
+
+    def cleanup_all_progress(self):
+        """Manually clean up all progress files (useful for corrupted chunks)."""
+        progress_dir = self.output_dir / f"{self.processor_name}_progress"
+        
+        if progress_dir.exists():
+            try:
+                import shutil
+                shutil.rmtree(progress_dir)
+                self.logger.info(f"Manually cleaned up all progress files from {progress_dir}")
+                # Reset resume info
+                self.resume_info = {}
+                return True
+            except Exception as e:
+                self.logger.error(f"Could not clean up progress files: {e}")
+                return False
+        else:
+            self.logger.info("No progress files to clean up")
+            return True
+
     def _save_dataset(self) -> Dict[str, str]:
         """Save the processed dataset to disk using HuggingFace datasets."""
         saved_files = {}
         
+        # Check if processed dataset exists and is not None
+        if self.processed_dataset is None:
+            self.logger.warning("No processed dataset to save - processing may have failed")
+            return saved_files
+        
         self.logger.info("Saving dataset using HuggingFace save_to_disk...")
         
         if isinstance(self.processed_dataset, DatasetDict):
+            # Check if DatasetDict has any valid splits
+            valid_splits = {k: v for k, v in self.processed_dataset.items() if v is not None and len(v) > 0}
+            
+            if not valid_splits:
+                self.logger.warning("No valid splits found in DatasetDict - nothing to save")
+                return saved_files
+            
             # Save entire DatasetDict to disk
             filename = f"{self.processor_name}"
             filepath = self.output_dir / filename
-            self.processed_dataset.save_to_disk(str(filepath))
+            
+            # Create a new DatasetDict with only valid splits
+            if len(valid_splits) < len(self.processed_dataset):
+                filtered_dataset = DatasetDict(valid_splits)
+                filtered_dataset.save_to_disk(str(filepath))
+                self.logger.info(f"Saved {len(valid_splits)} valid splits (filtered from {len(self.processed_dataset)} total)")
+            else:
+                self.processed_dataset.save_to_disk(str(filepath))
+                
             saved_files["dataset_dict"] = str(filepath)
         else:
+            # Single dataset - check if it's valid
+            if len(self.processed_dataset) == 0:
+                self.logger.warning("Processed dataset is empty - nothing to save")
+                return saved_files
+                
             # Save single dataset to disk
             filename = f"{self.processor_name}"
             filepath = self.output_dir / filename
@@ -232,32 +541,33 @@ class DatasetProcessor:
         self.logger.info(f"Saved dataset to: {filepath}")
         return saved_files
 
-    def process(self) -> Dict[str, Any]:
+    def process(self) -> Dict[str, str]:
         """
-        Process the dataset and save to disk using HuggingFace datasets.
-        
+        Process the dataset with the given preprocessing function.
+            
         Returns:
-            Dictionary containing processing results, file paths, and metadata
+            Dictionary with paths to saved dataset files
         """
-        self.logger.info(f"Starting dataset processing: {self.processor_name}")
+        self.logger.info(f"Starting dataset processing with {self.processor_name}")
+        
+        # Check if we have resume information
+        if self.resume_info:
+            self.logger.info("Resume mode detected - will continue from latest saved chunks")
+            for split_name, info in self.resume_info.items():
+                self.logger.info(f"  {split_name}: resuming from chunk {info['latest_chunk']}")
+        else:
+            self.logger.info("Starting fresh processing")
+            
+        if self.start_index is not None and self.start_index > 0:
+            self.logger.info(f"Debug mode: starting from index {self.start_index}")
         
         # Apply preprocessing
         self._apply_preprocessing()
         
-        # Save dataset
-        saved_files = self._save_dataset()
+        # Save the processed dataset
+        results = self._save_dataset()
         
-        # Compile results
-        results = {
-            "processor_name": self.processor_name,
-            "dataset_name": self.dataset_name,
-            "timestamp": self.timestamp,
-            "output_dir": str(self.output_dir),
-            "saved_files": saved_files,
-            "split_limits": self.split_limits,
-            "num_threads": self.num_threads,
-            "success": True
-        }
+        # Clean up progress files only if explicitly requested
+        # self._cleanup_progress_files()  # Commented out to preserve chunks
         
-        self.logger.info("Dataset processing completed successfully")
         return results

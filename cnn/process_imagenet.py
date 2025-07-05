@@ -33,14 +33,15 @@ def main():
         preprocess_fn=preprocess_images,
         processor_name="imagenet_processor",
         split_limits={
-            "train": None,
-            "validation": None,
-            "test": None
+            "train": 15000,
+            "validation": 10000,
+            "test": 10000
         },
+        # PERFORMANCE OPTIMIZATIONS:
         num_threads=2,
-        start_index=None,  # Start from this position to reproduce the error
-        chunk_size=50000,  # Process in smaller chunks to prevent resource exhaustion
-        trust_remote_code=True,       # Trust remote code for dataset loading
+        chunk_size=5000,
+        batch_size=200,
+        trust_remote_code=True,
         # download_mode="force_redownload",  # Force redownload of the dataset
     )
     
@@ -56,17 +57,11 @@ def main():
         
         print(f"\n✅ Dataset processing completed successfully!")
         print(f"📊 Processing Results:")
-        print(f"  Processor name: {results['processor_name']}")
-        print(f"  Dataset name: {results['dataset_name']}")
-        print(f"  Timestamp: {results['timestamp']}")
-        print(f"  Output directory: {results['output_dir']}")
-        print(f"  Saved files: {results['saved_files']}")
-        print(f"  Split limits: {results['split_limits']}")
-        print(f"  Success: {results['success']}")
+        print(f"  Saved files: {results}")
         
         # Display dataset information
         print(f"\n📈 Dataset Information:")
-        if hasattr(processor, 'processed_dataset'):
+        if hasattr(processor, 'processed_dataset') and processor.processed_dataset:
             if hasattr(processor.processed_dataset, 'items'):
                 # DatasetDict
                 for split_name, split_dataset in processor.processed_dataset.items():
@@ -81,7 +76,7 @@ def main():
                 if len(processor.processed_dataset) > 0:
                     print(f"  Sample keys: {list(processor.processed_dataset[0].keys())}")
         
-        print(f"\n💾 Processed dataset saved to: {results['output_dir']}")
+        print(f"\n💾 Processed dataset saved to: {processor.output_dir}")
         print(f"📁 You can now use this processed dataset for training!")
         
     except Exception as e:
@@ -89,7 +84,7 @@ def main():
         return
     
     print(f"\n✅ ImageNet-1k processing completed successfully!")
-    print(f"📁 Check {results['output_dir']} for processed dataset files")
+    print(f"📁 Check {processor.output_dir} for processed dataset files")
 
 if __name__ == "__main__":
     main() 
