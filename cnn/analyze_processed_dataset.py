@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Analyze the processed dataset and verify it against original chunks"""
+"""Analyze the processed dataset and verify it against original chunks using hard chunk boundaries"""
 
 from pathlib import Path
 from datasets import load_from_disk, load_dataset
@@ -123,8 +123,6 @@ def analyze_processed_dataset():
             print(f"    Found chunks: {[num for num, _ in chunk_info]}")
             
             # Analyze each individual chunk
-            running_total = 0  # Track cumulative samples processed
-            
             for chunk_num, chunk_file in chunk_info:
                 try:
                     print(f"      📦 Loading chunk {chunk_num}...")
@@ -168,10 +166,16 @@ def analyze_processed_dataset():
                     if original_dataset and split_name in original_dataset:
                         original_split = original_dataset[split_name]
                         
-                        # Calculate expected start position for this chunk
-                        # Use running total instead of chunk_num * chunk_size since chunks might be variable size
-                        expected_start = running_total
-                        print(f"         🎯 Expected position: samples {expected_start:,} - {expected_start + chunk_samples - 1:,}")
+                        # Calculate expected start position for this chunk using hard chunk boundaries
+                        # This accounts for skipped batches by using (chunk_num - 1) * chunk_size
+                        # since chunks are numbered starting from 1, not 0
+                        if chunk_size is not None:
+                            expected_start = (chunk_num - 1) * chunk_size
+                            expected_end = expected_start + chunk_samples - 1
+                            print(f"         🎯 Expected position (hard boundaries): samples {expected_start:,} - {expected_end:,}")
+                        else:
+                            print(f"         ⚠️  Cannot determine expected position - chunk size unknown")
+                            expected_start = None
                         
                         # Check multiple samples for alignment
                         sample_indices = []
@@ -186,9 +190,12 @@ def analyze_processed_dataset():
                         alignment_details = []
                         
                         for local_idx in sample_indices:
-                            global_idx = expected_start + local_idx
+                            if expected_start is not None:
+                                global_idx = expected_start + local_idx
+                            else:
+                                global_idx = None
                             
-                            if global_idx < len(original_split) and local_idx < chunk_samples:
+                            if global_idx is not None and global_idx < len(original_split) and local_idx < chunk_samples:
                                 try:
                                     chunk_label = chunk_dataset[local_idx]['labels']
                                     original_label = original_split[global_idx]['label']
@@ -201,6 +208,12 @@ def analyze_processed_dataset():
                                 except Exception as e:
                                     alignment_details.append(f"idx {local_idx}→{global_idx}: ⚠️  Error: {e}")
                                     alignment_ok = False
+                            elif global_idx is None:
+                                alignment_details.append(f"idx {local_idx}: ⚠️  Cannot verify - chunk size unknown")
+                                alignment_ok = False
+                            elif global_idx >= len(original_split):
+                                alignment_details.append(f"idx {local_idx}→{global_idx}: ⚠️  Beyond original dataset ({len(original_split):,} samples)")
+                                alignment_ok = False
                         
                         # Show alignment results
                         print(f"         🔍 Alignment check:")
@@ -214,9 +227,6 @@ def analyze_processed_dataset():
                         else:
                             print(f"         ❌ Chunk alignment failed")
                     
-                    # Update running total for next chunk
-                    running_total += chunk_samples
-                    
                     print(f"         ✅ Chunk {chunk_num} analysis complete")
                     print()  # Add spacing between chunks
                
@@ -229,6 +239,23 @@ def analyze_processed_dataset():
             print(f"    📊 Summary:")
             print(f"      Total chunks: {len(chunk_info)}")
             print(f"      Total samples in chunks: {total_chunk_samples:,}")
+            
+            # Show chunk continuity/gaps
+            if chunk_info:
+                chunk_numbers = [num for num, _ in chunk_info]
+                min_chunk = min(chunk_numbers)
+                max_chunk = max(chunk_numbers)
+                expected_chunks = set(range(min_chunk, max_chunk + 1))
+                actual_chunks = set(chunk_numbers)
+                missing_chunks = expected_chunks - actual_chunks
+                
+                print(f"      Chunk range: {min_chunk} to {max_chunk}")
+                if missing_chunks:
+                    print(f"      ⚠️  Missing chunks: {sorted(missing_chunks)}")
+                    print(f"      ✅ Present chunks: {sorted(actual_chunks)}")
+                else:
+                    print(f"      ✅ All chunks present in range")
+            
             if chunk_size is not None:
                 print(f"      Expected total (if uniform): {len(chunk_info) * chunk_size:,}")
             else:
