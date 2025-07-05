@@ -404,24 +404,34 @@ def preprocess_images(examples):
     mean = [0.485, 0.456, 0.406]
     std = [0.229, 0.224, 0.225]
 
-    for i, image in enumerate(examples['image']):  # ImageNet uses 'image' column
+    # Try to access the images - this is where UTF-8 EXIF errors occur
+    try:
+        images = examples['image']  # This line can trigger UTF-8 EXIF errors
+        labels_list = examples['label']
+    except UnicodeDecodeError as utf8_error:
+        print(f"UTF-8 EXIF error when accessing batch: {utf8_error}")
+        print(f"Skipping entire batch due to EXIF decoding error")
+        # Return empty results for this batch
+        return {
+            'pixel_values': [],
+            'labels': []
+        }
+    except Exception as e:
+        print(f"Error accessing batch data: {e}")
+        return {
+            'pixel_values': [],
+            'labels': []
+        }
+
+    for i, image in enumerate(images):  # Now we can safely iterate
         try:
+            # Convert image to PIL RGB format
             if isinstance(image, str):
-                # If image is a file path, load it and convert to RGB color mode (3 channels: Red, Green, Blue)
-                # This ensures consistent color format regardless of input image type
                 image = Image.open(image).convert('RGB')
             elif isinstance(image, np.ndarray):
-                # If image is numpy array, convert to PIL Image (Python Imaging Library)
-                # Handle both grayscale and RGB images by converting to RGB
-                if len(image.shape) == 2:
-                    # Grayscale image - convert to RGB
-                    image = Image.fromarray(image).convert('RGB')
-                elif len(image.shape) == 3:
-                    # RGB image
-                    image = Image.fromarray(image)
-                else:
-                    # Unexpected format - convert to RGB
-                    image = Image.fromarray(image).convert('RGB')
+                image = Image.fromarray(image).convert('RGB')
+            else:
+                image = image.convert('RGB')
             
             # Resize to 224×224 (ImageNet standard)
             image = image.resize((224, 224), Image.BILINEAR)
@@ -457,7 +467,7 @@ def preprocess_images(examples):
                 
             # Only add image and corresponding label if processing succeeded
             pixel_values.append(image.numpy())
-            labels.append(examples['label'][i])
+            labels.append(labels_list[i])
             
         except Exception as e:
             import traceback
