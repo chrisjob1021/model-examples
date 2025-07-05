@@ -39,7 +39,7 @@ def main():
         },
         # PERFORMANCE OPTIMIZATIONS:
         num_threads=2,
-        chunk_size=100000,
+        chunk_size=250000,
         batch_size=200,
         trust_remote_code=True,
         # download_mode="force_redownload",  # Force redownload of the dataset

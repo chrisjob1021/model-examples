@@ -5,10 +5,11 @@ from pathlib import Path
 from datasets import load_from_disk, load_dataset
 
 def analyze_processed_dataset():
-    chunk_size = 100000  # Expected individual chunk size
-    total_chunk_samples = 0
-
     """Analyze the final processed dataset and verify against chunks."""
+    
+    # We'll determine the actual chunk size from the first chunk we find
+    chunk_size = None
+    total_chunk_samples = 0
 
     # Check for the final processed dataset
     processed_dataset_path = Path("./processed_datasets/imagenet_processor")
@@ -122,6 +123,8 @@ def analyze_processed_dataset():
             print(f"    Found chunks: {[num for num, _ in chunk_info]}")
             
             # Analyze each individual chunk
+            running_total = 0  # Track cumulative samples processed
+            
             for chunk_num, chunk_file in chunk_info:
                 try:
                     print(f"      📦 Loading chunk {chunk_num}...")
@@ -131,6 +134,11 @@ def analyze_processed_dataset():
                     
                     print(f"         💾 Loaded: {chunk_samples:,} samples")
                     print(f"         📁 File: {chunk_file}")
+                    
+                    # Determine chunk size from first chunk if not set
+                    if chunk_size is None:
+                        chunk_size = chunk_samples
+                        print(f"         📏 Detected chunk size: {chunk_size:,}")
                     
                     # Show features
                     if hasattr(chunk_dataset, 'features'):
@@ -147,10 +155,10 @@ def analyze_processed_dataset():
                         sample = chunk_dataset[0]
                         print(f"         📊 Sample structure: {list(sample.keys())}")
                         
-                        # Check data types
-                        if 'pixel_values' in sample:
-                            pixel_shape = sample['pixel_values'].shape if hasattr(sample['pixel_values'], 'shape') else "Unknown"
-                            print(f"         🖼️  Image shape: {pixel_shape}")
+                        # # Check data types
+                        # if 'pixel_values' in sample:
+                        #     pixel_shape = sample['pixel_values'].shape if hasattr(sample['pixel_values'], 'shape') else "Unknown"
+                        #     print(f"         🖼️  Image shape: {pixel_shape}")
                         
                         if 'labels' in sample:
                             label_value = sample['labels']
@@ -161,7 +169,8 @@ def analyze_processed_dataset():
                         original_split = original_dataset[split_name]
                         
                         # Calculate expected start position for this chunk
-                        expected_start = (chunk_num - 1) * chunk_size
+                        # Use running total instead of chunk_num * chunk_size since chunks might be variable size
+                        expected_start = running_total
                         print(f"         🎯 Expected position: samples {expected_start:,} - {expected_start + chunk_samples - 1:,}")
                         
                         # Check multiple samples for alignment
@@ -205,24 +214,8 @@ def analyze_processed_dataset():
                         else:
                             print(f"         ❌ Chunk alignment failed")
                     
-                    # Verify chunk can be properly loaded and accessed
-                    try:
-                        # Test random access
-                        if chunk_samples > 0:
-                            test_idx = min(chunk_samples - 1, 100)
-                            test_sample = chunk_dataset[test_idx]
-                            print(f"         🧪 Random access test: sample {test_idx} ✅")
-                        
-                        # Test iteration (small sample)
-                        iteration_count = 0
-                        for sample in chunk_dataset:
-                            iteration_count += 1
-                            if iteration_count >= 3:  # Test first 3 samples
-                                break
-                        print(f"         🔄 Iteration test: {iteration_count} samples ✅")
-                        
-                    except Exception as e:
-                        print(f"         ❌ Data access error: {e}")
+                    # Update running total for next chunk
+                    running_total += chunk_samples
                     
                     print(f"         ✅ Chunk {chunk_num} analysis complete")
                     print()  # Add spacing between chunks
@@ -236,7 +229,10 @@ def analyze_processed_dataset():
             print(f"    📊 Summary:")
             print(f"      Total chunks: {len(chunk_info)}")
             print(f"      Total samples in chunks: {total_chunk_samples:,}")
-            print(f"      Expected total: {len(chunk_info) * chunk_size:,}")
+            if chunk_size is not None:
+                print(f"      Expected total (if uniform): {len(chunk_info) * chunk_size:,}")
+            else:
+                print(f"      Expected total: Unknown (no chunks loaded)")
             
             # Compare chunk total with final dataset
             if processed_dataset_path.exists():
