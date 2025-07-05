@@ -460,8 +460,34 @@ def preprocess_images(examples):
             labels.append(examples['label'][i])
             
         except Exception as e:
+            import traceback
+            
             # Skip this image if any error occurs (including UTF-8 encoding errors)
             print(f"Warning: Skipping image {i} due to error: {type(e).__name__}: {e}")
+            
+            # Enhanced debugging for UTF-8 errors
+            if "utf-8" in str(e).lower() or "codec" in str(e).lower():
+                print(f"UTF-8 Error Details:")
+                print(f"  Image index: {i}")
+                print(f"  Image type: {type(image)}")
+                print(f"  Error: {e}")
+                
+                # Try to get more info about the problematic image
+                try:
+                    if hasattr(image, 'filename'):
+                        print(f"  Image filename: {image.filename}")
+                    elif isinstance(image, str):
+                        print(f"  Image path: {image}")
+                except:
+                    pass
+                
+                # Print traceback for UTF-8 errors to see exactly where it fails
+                print(f"  Full traceback:")
+                tb_lines = traceback.format_exc().split('\n')
+                for line in tb_lines:
+                    if line.strip():
+                        print(f"    {line}")
+            
             # Don't add anything to pixel_values or labels - this effectively skips the image
 
     return {

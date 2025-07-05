@@ -6,6 +6,13 @@ import os
 
 from datasets import DatasetDict, load_dataset, concatenate_datasets, load_from_disk
 
+# Configure logging to show INFO level messages
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S'
+)
+
 class DatasetProcessor:
     """
     A wrapper class to handle processing a specified dataset and saving to disk.
@@ -328,15 +335,31 @@ class DatasetProcessor:
             self.logger.info(f"Memory usage before chunk: {memory_percent:.1f}%")
             
             try:
-                # Select chunk
-                chunk_dataset = dataset.select(range(chunk_start, chunk_end))
+                # Select chunk with debugging
+                self.logger.info(f"Selecting chunk data: indices {chunk_start} to {chunk_end-1}")
+                try:
+                    chunk_dataset = dataset.select(range(chunk_start, chunk_end))
+                    self.logger.info(f"Successfully selected chunk dataset: {len(chunk_dataset)} samples")
+                except Exception as select_error:
+                    self.logger.error(f"Error during dataset selection: {select_error}")
+                    if "utf-8" in str(select_error).lower():
+                        self.logger.error(f"UTF-8 error during dataset selection - problematic indices: {chunk_start}-{chunk_end-1}")
+                    raise select_error
                 
-                # Process chunk
-                processed_chunk = chunk_dataset.map(
-                    desc=f"Preprocessing {split_name} chunk {chunk_num}",
-                    remove_columns=chunk_dataset.column_names,
-                    **map_kwargs
-                )
+                # Process chunk with debugging
+                self.logger.info(f"Starting map operation for chunk {chunk_num}")
+                try:
+                    processed_chunk = chunk_dataset.map(
+                        desc=f"Preprocessing {split_name} chunk {chunk_num}",
+                        remove_columns=chunk_dataset.column_names,
+                        **map_kwargs
+                    )
+                    self.logger.info(f"Successfully completed map operation for chunk {chunk_num}")
+                except Exception as map_error:
+                    self.logger.error(f"Error during map operation: {map_error}")
+                    if "utf-8" in str(map_error).lower():
+                        self.logger.error(f"UTF-8 error during map operation - chunk indices: {chunk_start}-{chunk_end-1}")
+                    raise map_error
                 
                 # No need to filter - preprocessing only returns successful images
                 processed_chunks.append(processed_chunk)
@@ -359,7 +382,24 @@ class DatasetProcessor:
                 self.logger.info(f"Memory usage after chunk: {memory_percent:.1f}%")
                 
             except Exception as e:
+                import traceback
+                
                 self.logger.error(f"Error processing chunk {chunk_num}: {e}")
+                self.logger.error(f"Error type: {type(e).__name__}")
+                self.logger.error(f"Full traceback:")
+                
+                # Log the full traceback to see exactly where the error occurs
+                tb_lines = traceback.format_exc().split('\n')
+                for line in tb_lines:
+                    if line.strip():
+                        self.logger.error(f"  {line}")
+                
+                # Additional debugging for UTF-8 errors
+                if "utf-8" in str(e).lower() or "codec" in str(e).lower():
+                    self.logger.error(f"UTF-8 decoding error detected!")
+                    self.logger.error(f"Chunk range: samples {chunk_start} to {chunk_end-1}")
+                    self.logger.error(f"This suggests a problematic file in the dataset at these indices")
+                
                 self.logger.info("Error occurred - progress has already been saved for successful chunks")
                 
                 # Don't try to save anything here - successful chunks were already saved

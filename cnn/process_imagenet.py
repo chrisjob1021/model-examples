@@ -2,10 +2,18 @@
 """Process ImageNet-1k dataset using DatasetProcessor"""
 
 import torch
+import logging
 from prelu_cnn import preprocess_images
 
 # Import from shared_utils package
 from shared_utils import DatasetProcessor
+
+# Configure logging to show INFO level messages
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S'
+)
 
 def main():
     """Process ImageNet-1k dataset using DatasetProcessor."""
