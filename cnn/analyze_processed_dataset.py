@@ -5,8 +5,11 @@ from pathlib import Path
 from datasets import load_from_disk, load_dataset
 
 def analyze_processed_dataset():
+    chunk_size = 100000  # Expected individual chunk size
+    total_chunk_samples = 0
+
     """Analyze the final processed dataset and verify against chunks."""
-    
+
     # Check for the final processed dataset
     processed_dataset_path = Path("./processed_datasets/imagenet_processor")
     progress_dir = Path("./processed_datasets/imagenet_processor_progress")
@@ -117,9 +120,6 @@ def analyze_processed_dataset():
             chunk_info.sort(key=lambda x: x[0])
             
             print(f"    Found chunks: {[num for num, _ in chunk_info]}")
-            
-            chunk_size = 5000  # Expected individual chunk size
-            total_chunk_samples = 0
             
             # Analyze each individual chunk
             for chunk_num, chunk_file in chunk_info:

@@ -33,13 +33,13 @@ def main():
         preprocess_fn=preprocess_images,
         processor_name="imagenet_processor",
         split_limits={
-            "train": 15000,
-            "validation": 10000,
-            "test": 10000
+            "train": None,
+            "validation": None,
+            "test": None
         },
         # PERFORMANCE OPTIMIZATIONS:
         num_threads=2,
-        chunk_size=5000,
+        chunk_size=100000,
         batch_size=200,
         trust_remote_code=True,
         # download_mode="force_redownload",  # Force redownload of the dataset
