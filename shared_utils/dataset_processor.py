@@ -33,6 +33,7 @@ class DatasetProcessor:
         chunk_size: int = 50000,  # Process in chunks to prevent resource exhaustion
         batch_size: int = 500,    # Batch size for map operations (increased from 200)
         concatenate_only: bool = False,  # Only concatenate existing chunks, don't load original dataset
+        features = None,  # Features schema for the output dataset
         **load_dataset_kwargs
     ):
         """
@@ -49,6 +50,7 @@ class DatasetProcessor:
             chunk_size: Number of samples to process in each chunk
             batch_size: Batch size for map operations (increased from 200)
             concatenate_only: Only concatenate existing chunks, don't load original dataset
+            features: Features schema for the output dataset (to preserve tensor format)
             **load_dataset_kwargs: Additional arguments to pass to load_dataset
         """
         self.dataset_name = dataset_name
@@ -61,6 +63,7 @@ class DatasetProcessor:
         self.chunk_size = chunk_size
         self.batch_size = batch_size
         self.concatenate_only = concatenate_only
+        self.features = features
         self.load_dataset_kwargs = load_dataset_kwargs
         
         # Setup logging
@@ -247,6 +250,10 @@ class DatasetProcessor:
             'load_from_cache_file': False,  # Disable caching to prevent huge cache files
             'cache_file_name': None,        # Don't create cache files
         }
+        
+        # Add features schema if provided (to preserve tensor format)
+        if self.features is not None:
+            map_kwargs['features'] = self.features
 
         if isinstance(self.dataset, DatasetDict):
             # Process each split separately
@@ -386,6 +393,10 @@ class DatasetProcessor:
                         self.logger.error(f"UTF-8 error during map operation - chunk indices: {chunk_start}-{chunk_end-1}")
                     raise map_error
                 
+                # print(type(processed_chunk))
+                print(type(processed_chunk['labels']))
+                print(type(processed_chunk['pixel_values']))
+
                 # No need to filter - preprocessing only returns successful images
                 processed_chunks.append(processed_chunk)
                 

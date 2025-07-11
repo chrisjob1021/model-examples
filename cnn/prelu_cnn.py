@@ -457,8 +457,6 @@ def preprocess_images(examples):
             # Apply ImageNet normalization using tensor operations (much faster!)
             image = (image - mean.view(3, 1, 1)) / std.view(3, 1, 1)
                 
-            # OPTIMIZATION: Keep as tensor instead of converting to numpy!
-            # This eliminates the need for tensor->numpy->tensor conversion during training
             pixel_values.append(image)  # Keep as tensor for faster indexing
             labels.append(labels_list[i])
             
@@ -490,8 +488,12 @@ def preprocess_images(examples):
                 for line in tb_lines:
                     if line.strip():
                         print(f"    {line}")
-            
-            # Don't add anything to pixel_values or labels - this effectively skips the image
+    
+    # Convert both lists to tensors for consistency
+    pixel_values = torch.stack(pixel_values)
+    labels = torch.tensor(labels)
+    print(type(pixel_values))
+    print(type(labels))
 
     return {
         'pixel_values': pixel_values,
