@@ -251,7 +251,7 @@ class DatasetProcessor:
             'cache_file_name': None,        # Don't create cache files
         }
         
-        # Add features schema if provided (to preserve tensor format)
+        # Add features schema if provided (to preserve array format)
         if self.features is not None:
             map_kwargs['features'] = self.features
 

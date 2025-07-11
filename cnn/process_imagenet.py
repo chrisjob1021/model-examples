@@ -5,6 +5,7 @@ import torch
 import logging
 import argparse
 from prelu_cnn import preprocess_images
+from datasets import Features, Array3D, Value
 
 # Import from shared_utils package
 from shared_utils import DatasetProcessor
@@ -45,6 +46,11 @@ def main():
     
     # Create DatasetProcessor for ImageNet-1k
     print("🔄 Creating DatasetProcessor for ImageNet-1k...")
+
+    features = Features({
+        "pixel_values": Array3D(shape=(3, 224, 224), dtype="float32"),
+        "labels": Value(dtype="int32")
+    })
     
     processor = DatasetProcessor(
         dataset_name="imagenet-1k",
@@ -60,6 +66,7 @@ def main():
         num_threads=2,
         chunk_size=250000,
         batch_size=200,
+        features=features,
         trust_remote_code=True,
         cache_dir=None,  # Don't use cache
         concatenate_only=args.concatenate_only,  # Skip dataset loading if concatenate-only

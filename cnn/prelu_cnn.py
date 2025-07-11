@@ -397,9 +397,6 @@ ImageFile.LOAD_TRUNCATED_IMAGES = True
 # -------------------------------------------------------
 def preprocess_images(examples):
     """Preprocess images for ImageNet (optimized for tensor storage)."""
-    pixel_values = []
-    labels = []
-    
     # ImageNet normalization values (standard for pretrained models)
     mean = torch.tensor([0.485, 0.456, 0.406])
     std = torch.tensor([0.229, 0.224, 0.225])
@@ -413,15 +410,20 @@ def preprocess_images(examples):
         print(f"Skipping entire batch due to EXIF decoding error")
         # Return empty results for this batch
         return {
-            'pixel_values': [],
-            'labels': []
+            'pixel_values': torch.empty(0, 3, 224, 224),
+            'labels': torch.empty(0, dtype=torch.long)
         }
     except Exception as e:
         print(f"Error accessing batch data: {e}")
         return {
-            'pixel_values': [],
-            'labels': []
+            'pixel_values': torch.empty(0, 3, 224, 224),
+            'labels': torch.empty(0, dtype=torch.long)
         }
+
+    # Pre-allocate tensors for the batch
+    batch_size = len(images)
+    processed_images = torch.empty(batch_size, 3, 224, 224)
+    processed_labels = torch.empty(batch_size, dtype=torch.long)
 
     for i, image in enumerate(images):  # Now we can safely iterate
         try:
@@ -457,8 +459,9 @@ def preprocess_images(examples):
             # Apply ImageNet normalization using tensor operations (much faster!)
             image = (image - mean.view(3, 1, 1)) / std.view(3, 1, 1)
                 
-            pixel_values.append(image)  # Keep as tensor for faster indexing
-            labels.append(labels_list[i])
+            # Store in pre-allocated tensor
+            processed_images[i] = image
+            processed_labels[i] = labels_list[i]
             
         except Exception as e:
             import traceback
@@ -488,16 +491,10 @@ def preprocess_images(examples):
                 for line in tb_lines:
                     if line.strip():
                         print(f"    {line}")
-    
-    # Convert both lists to tensors for consistency
-    pixel_values = torch.stack(pixel_values)
-    labels = torch.tensor(labels)
-    print(type(pixel_values))
-    print(type(labels))
 
     return {
-        'pixel_values': pixel_values,
-        'labels': labels
+        'pixel_values': processed_images.numpy(),
+        'labels': processed_labels.numpy()
     }
 
 # -------------------------------------------------------
