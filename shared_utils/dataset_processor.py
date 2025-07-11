@@ -629,6 +629,12 @@ class DatasetProcessor:
                 except Exception as e:
                     self.logger.warning(f"Could not cast dataset features: {e}")
 
+            # Ensure fast retrieval by setting the format to return numpy arrays
+            try:
+                final_dataset.set_format(type="torch")
+            except Exception as e:
+                self.logger.warning(f"Could not set dataset format: {e}")
+
             self.logger.info(
                 f"Successfully concatenated {split_name}: {len(final_dataset):,} total samples"
             )
