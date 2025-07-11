@@ -77,8 +77,8 @@ def main():
     training_args = TrainingArguments(
         output_dir=f"./results/cnn_results_{'prelu' if use_prelu else 'relu'}",
         num_train_epochs=1,
-        per_device_train_batch_size=1024,
-        per_device_eval_batch_size=1024,
+        per_device_train_batch_size=128,
+        per_device_eval_batch_size=128,
         learning_rate=0.01,
         weight_decay=0.001,
         warmup_steps=0,  # not applicable to SGD
@@ -90,6 +90,8 @@ def main():
         logging_dir="./logs",
         # Fix for custom dataset format
         remove_unused_columns=False,  # Don't remove any columns automatically
+        # Parallel data loading
+        dataloader_num_workers=8,  # Number of parallel workers for data loading
     )
     
     print(f"\n⚙️ Training Configuration:")
@@ -99,6 +101,7 @@ def main():
     print(f"  Evaluation steps: {training_args.eval_steps}")
     print(f"  Output directory: {training_args.output_dir}")
     print(f"  Remove unused columns: {training_args.remove_unused_columns}")
+    print(f"  Dataloader workers: {training_args.dataloader_num_workers}")
     
     # Create trainer using ModelTrainer
     print(f"\n🏋️ Setting up trainer...")
