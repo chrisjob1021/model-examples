@@ -617,7 +617,21 @@ class DatasetProcessor:
         if chunks:
             self.logger.info(f"Concatenating {len(chunks)} chunks for {split_name}...")
             final_dataset = concatenate_datasets(chunks)
-            self.logger.info(f"Successfully concatenated {split_name}: {len(final_dataset):,} total samples")
+
+            # Ensure the resulting dataset keeps the desired feature types.  In
+            # some cases `concatenate_datasets` drops the `Array3D` specification
+            # and the loaded dataset ends up storing lists of Python floats.  To
+            # avoid very slow retrieval of `pixel_values`, explicitly cast the
+            # features after concatenation.
+            if self.features is not None:
+                try:
+                    final_dataset = final_dataset.cast(self.features)
+                except Exception as e:
+                    self.logger.warning(f"Could not cast dataset features: {e}")
+
+            self.logger.info(
+                f"Successfully concatenated {split_name}: {len(final_dataset):,} total samples"
+            )
             return final_dataset
         else:
             self.logger.warning(f"No valid chunks loaded for {split_name}")
