@@ -77,13 +77,13 @@ def main():
     training_args = TrainingArguments(
         output_dir=f"./results/cnn_results_{'prelu' if use_prelu else 'relu'}",
         num_train_epochs=1,
-        per_device_train_batch_size=128,
-        per_device_eval_batch_size=128,
+        per_device_train_batch_size=1024,
+        per_device_eval_batch_size=1024,
         learning_rate=0.01,
         weight_decay=0.001,
         warmup_steps=0,  # not applicable to SGD
-        gradient_accumulation_steps=16,
-        eval_steps=500,
+        gradient_accumulation_steps=8,
+        eval_steps=100,
         logging_steps=50,
         save_steps=100,
         seed=42,
