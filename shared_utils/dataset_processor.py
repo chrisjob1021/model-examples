@@ -392,10 +392,6 @@ class DatasetProcessor:
                     if "utf-8" in str(map_error).lower():
                         self.logger.error(f"UTF-8 error during map operation - chunk indices: {chunk_start}-{chunk_end-1}")
                     raise map_error
-                
-                # print(type(processed_chunk))
-                print(type(processed_chunk['labels']))
-                print(type(processed_chunk['pixel_values']))
 
                 # No need to filter - preprocessing only returns successful images
                 processed_chunks.append(processed_chunk)
