@@ -76,28 +76,46 @@ def main():
     # Create training arguments
     training_args = TrainingArguments(
         output_dir=f"./results/cnn_results_{'prelu' if use_prelu else 'relu'}",
-        num_train_epochs=1,
-        per_device_train_batch_size=128,
-        per_device_eval_batch_size=128,
-        learning_rate=0.01,
-        weight_decay=0.001,
-        warmup_steps=0,  # not applicable to SGD
-        gradient_accumulation_steps=8,
-        eval_steps=100,
-        logging_steps=50,
-        save_steps=100,
+        num_train_epochs=10,  # More epochs for better convergence
+        per_device_train_batch_size=64,  # Reduced for stability
+        per_device_eval_batch_size=64,
+        learning_rate=1e-3,  # Much more reasonable learning rate
+        weight_decay=1e-4,  # Reduced weight decay
+        warmup_steps=1000,  # Warmup for better training stability
+        gradient_accumulation_steps=4,  # Reduced for more frequent updates
+        eval_steps=50,  # Less frequent evaluation
+        logging_steps=25,  # Less frequent logging
+        save_steps=500,  # Save less frequently
         seed=42,
-        logging_dir="./logs",
+        logging_dir="./logs/logs",
         # Fix for custom dataset format
-        remove_unused_columns=False,  # Don't remove any columns automatically
+        remove_unused_columns=False,
         # Parallel data loading
-        dataloader_num_workers=8,  # Number of parallel workers for data loading
+        dataloader_num_workers=4,  # Reduced to avoid memory issues
+        # Optimizer and scheduler settings
+        optim="adamw_torch",  # Explicit optimizer
+        lr_scheduler_type="cosine",  # Cosine annealing scheduler
+        max_grad_norm=1.0,  # Gradient clipping
+        # Evaluation settings
+        eval_strategy="steps",
+        save_strategy="steps",
+        logging_strategy="steps",
+        # Model saving
+        save_total_limit=3,  # Keep only 3 best checkpoints
+        load_best_model_at_end=True,
+        metric_for_best_model="eval_loss",
+        greater_is_better=False,
     )
     
     print(f"\n⚙️ Training Configuration:")
     print(f"  Epochs: {training_args.num_train_epochs}")
     print(f"  Batch size: {training_args.per_device_train_batch_size}")
     print(f"  Learning rate: {training_args.learning_rate}")
+    print(f"  Weight decay: {training_args.weight_decay}")
+    print(f"  Warmup steps: {training_args.warmup_steps}")
+    print(f"  LR scheduler: {training_args.lr_scheduler_type}")
+    print(f"  Optimizer: {training_args.optim}")
+    print(f"  Gradient clipping: {training_args.max_grad_norm}")
     print(f"  Evaluation steps: {training_args.eval_steps}")
     print(f"  Output directory: {training_args.output_dir}")
     print(f"  Remove unused columns: {training_args.remove_unused_columns}")
@@ -110,7 +128,7 @@ def main():
         training_args=training_args,
         train_dataset=train_dataset,
         eval_dataset=eval_dataset,
-        trainer_class=CNNTrainer
+        trainer_class=CNNTrainer,
     )
     
     # Run training
@@ -119,6 +137,10 @@ def main():
     
     accuracy = results.get('eval_accuracy', 0.0)
     loss = results.get('eval_loss', float('inf'))
+    
+    print(f"\n📊 Final Results:")
+    print(f"  Evaluation Accuracy: {accuracy:.4f}")
+    print(f"  Evaluation Loss: {loss:.4f}")
     
     print(f"💾 Model saved to: {training_args.output_dir}")
     print(f"\n✅ Training completed successfully!")
