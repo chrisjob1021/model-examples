@@ -4,3 +4,4 @@
 *.egg-info/
 processed_datasets/
 results/
+logs/
