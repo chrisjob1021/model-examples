@@ -133,10 +133,15 @@ def main():
     
     # Run training
     print(f"\n🎯 Starting training...")
-    _, results = trainer.run()
+    # _, results = trainer.run()
     
-    accuracy = results.get('eval_accuracy', 0.0)
-    loss = results.get('eval_loss', float('inf'))
+    # accuracy = results.get('eval_accuracy', 0.0)
+    # loss = results.get('eval_loss', float('inf'))
+
+    # Evaluate the model after training
+    eval_results = trainer.evaluate()
+    accuracy = eval_results.get('eval_accuracy', 0.0)
+    loss = eval_results.get('eval_loss', float('inf'))
     
     print(f"\n📊 Final Results:")
     print(f"  Evaluation Accuracy: {accuracy:.4f}")

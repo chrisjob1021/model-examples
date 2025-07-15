@@ -85,3 +85,21 @@ class ModelTrainer:
         print(f"Train results: {train_results}")
         print(f"Eval results: {eval_results}")
         return trainer, train_results, eval_results 
+    
+    def evaluate(self):
+        """
+        Executes the training and evaluation process.
+        """
+        self._preprocess_datasets()
+
+        trainer = self.trainer_class(
+            model=self.model,
+            args=self.training_args,
+            train_dataset=self.train_dataset_processed,
+            eval_dataset=self.eval_dataset_processed,
+            data_collator=self.data_collator,
+        )
+
+        print("Evaluating model...")
+        eval_results = trainer.evaluate()
+        return eval_results
