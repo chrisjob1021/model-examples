@@ -32,7 +32,7 @@ def main():
     dataset = load_from_disk(dataset_path)
     
     train_dataset = dataset["train"]
-    eval_dataset = dataset["validation"]
+    eval_dataset = dataset["validation"].select(range(1000))
     
     print(f"✅ Loaded preprocessed datasets from disk")
     print(f"✅ Training samples: {len(train_dataset):,}")
