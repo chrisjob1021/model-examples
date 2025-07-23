@@ -105,6 +105,7 @@ def main():
         metric_for_best_model="eval_loss",
         greater_is_better=False,
         prediction_loss_only=False,
+        label_names=["labels"],
     )
     
     print(f"\n⚙️ Training Configuration:")
@@ -133,20 +134,19 @@ def main():
     
     # Run training
     print(f"\n🎯 Starting training...")
-    # _, results = trainer.run()
+    trainer.run()
     
     # accuracy = results.get('eval_accuracy', 0.0)
     # loss = results.get('eval_loss', float('inf'))
 
-    # Evaluate the model after training
-    eval_results = trainer.evaluate()
-    print(f"   eval_results: {eval_results}")
-    accuracy = eval_results.get('eval_accuracy', 0.0)
-    loss = eval_results.get('eval_loss', float('inf'))
+    # # Evaluate the model after training
+    # eval_results = trainer.evaluate()
+    # accuracy = eval_results.get('eval_accuracy', 0.0)
+    # loss = eval_results.get('eval_loss', float('inf'))
     
-    print(f"\n📊 Final Results:")
-    print(f"  Evaluation Accuracy: {accuracy:.4f}")
-    print(f"  Evaluation Loss: {loss:.4f}")
+    # print(f"\n📊 Final Results:")
+    # print(f"  Evaluation Accuracy: {accuracy:.4f}")
+    # print(f"  Evaluation Loss: {loss:.4f}")
     
     print(f"💾 Model saved to: {training_args.output_dir}")
     print(f"\n✅ Training completed successfully!")

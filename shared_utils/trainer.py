@@ -18,6 +18,7 @@ class ModelTrainer:
         data_collator=None,
         trainer_class=Trainer,
         compute_metrics=None,
+        compute_loss=None,
     ):
         """
         Initializes the ModelTrainer.
@@ -39,6 +40,7 @@ class ModelTrainer:
         self.data_collator = data_collator
         self.trainer_class = trainer_class
         self.compute_metrics = compute_metrics
+        self.compute_loss = compute_loss
 
         # Add timestamp to logging_dir to prevent overwriting logs
         if self.training_args.logging_dir:
@@ -51,7 +53,6 @@ class ModelTrainer:
         """
         Executes the training and evaluation process.
         """
-        self._preprocess_datasets()
 
         # Only initialize the trainer once and store it
         if not hasattr(self, "trainer"):
@@ -61,7 +62,6 @@ class ModelTrainer:
                 train_dataset=self.train_dataset_raw,
                 eval_dataset=self.eval_dataset_raw,
                 data_collator=self.data_collator,
-                compute_metrics=self.compute_metrics,
             )
 
         print("Starting training...")
@@ -85,13 +85,8 @@ class ModelTrainer:
                 train_dataset=self.train_dataset_raw,
                 eval_dataset=self.eval_dataset_raw,
                 data_collator=self.data_collator,
-                compute_metrics=self.compute_metrics,
             )
 
         print("Evaluating model...")
-        print("Trainer attributes:")
-        for attr in dir(self.trainer):
-            if not attr.startswith("__"):
-                print(f"  {attr}: {getattr(self.trainer, attr, None)}")
         eval_results = self.trainer.evaluate()
         return eval_results
