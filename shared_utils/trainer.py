@@ -38,6 +38,7 @@ class ModelTrainer:
         self.preprocess_fn = preprocess_fn
         self.data_collator = data_collator
         self.trainer_class = trainer_class
+        self.compute_metrics = compute_metrics
 
         # Add timestamp to logging_dir to prevent overwriting logs
         if self.training_args.logging_dir:
@@ -60,6 +61,7 @@ class ModelTrainer:
                 train_dataset=self.train_dataset_raw,
                 eval_dataset=self.eval_dataset_raw,
                 data_collator=self.data_collator,
+                compute_metrics=self.compute_metrics,
             )
 
         print("Starting training...")
@@ -83,6 +85,7 @@ class ModelTrainer:
                 train_dataset=self.train_dataset_raw,
                 eval_dataset=self.eval_dataset_raw,
                 data_collator=self.data_collator,
+                compute_metrics=self.compute_metrics,
             )
 
         print("Evaluating model...")
