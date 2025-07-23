@@ -379,7 +379,7 @@ class CNN(nn.Module):
             input_tensor = kwargs.get('pixel_values')
             if input_tensor is None:
                 raise ValueError("No input tensor provided. Expected 'x' or 'pixel_values' argument.")
-        
+                
         x = self.conv1(input_tensor)
         x = self.conv2(x)
         x = self.conv3(x)
@@ -503,7 +503,20 @@ def preprocess_images(examples):
 class CNNTrainer(Trainer):
     """Custom trainer for CNN models."""
 
+    def __init__(self, *args, **kwargs):
+        """Pass ``compute_metrics`` to the base ``Trainer``."""
+        print(f"🔧 CNNTrainer.__init__ called with kwargs: {list(kwargs.keys())}")
+        # Remove compute_metrics from kwargs if it exists to avoid duplicate argument
+        if 'compute_metrics' in kwargs:
+            print(f"   Removing compute_metrics from kwargs")
+            kwargs.pop('compute_metrics', None)
+        
+        super().__init__(*args, compute_metrics=self.compute_metrics, **kwargs)
+        print(f"   CNNTrainer initialized successfully")
+
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
+        print(f"🔧 compute_loss called with inputs keys: {list(inputs.keys())}")
+        
         pixel_values = inputs["pixel_values"]
         labels = inputs["labels"]
 
@@ -534,16 +547,71 @@ class CNNTrainer(Trainer):
         loss_fn = nn.CrossEntropyLoss()
         loss = loss_fn(outputs, labels)
 
+        print(f"   Loss computed: {loss.item():.4f}")
         return (loss, outputs) if return_outputs else loss
 
-    def compute_metrics(self, eval_pred):
+    # def evaluation_step(self, model, inputs):
+    #     """Override evaluation step to ensure our custom logic is used."""
+    #     print(f"🔧 evaluation_step called!")
+        
+    #     # Call the parent evaluation_step
+    #     loss, logits, labels = super().evaluation_step(model, inputs, ignore_keys=None)
+        
+    #     print(f"   evaluation_step returned - loss: {loss}, logits shape: {logits.shape}, labels shape: {labels.shape}")
+        
+    #     return loss, logits, labels
+
+    # def evaluate(self, eval_dataset=None, ignore_keys=None, metric_key_prefix="eval"):
+    #     """Override evaluate method to force our custom logic."""
+    #     print(f"🔧 CNNTrainer.evaluate called!")
+        
+    #     # Call parent evaluate method
+    #     metrics = super().evaluate(eval_dataset, ignore_keys, metric_key_prefix)
+        
+    #     print(f"   Parent evaluate returned: {metrics}")
+        
+    #     # Force our compute_metrics to be called
+    #     print(f"   Forcing compute_metrics call...")
+    #     # We need to get the predictions and labels from the evaluation
+    #     # This is a bit hacky but should work
+    #     eval_dataloader = self.get_eval_dataloader(eval_dataset)
+    #     predictions = []
+    #     labels = []
+        
+    #     self.model.eval()
+    #     device = next(self.model.parameters()).device
+    #     with torch.no_grad():
+    #         for batch in eval_dataloader:
+    #             batch = {k: v.to(device) for k, v in batch.items()}
+    #             outputs = self.model(**batch)
+    #             predictions.append(outputs.cpu().numpy())
+    #             labels.append(batch["labels"].cpu().numpy())
+        
+    #     predictions = np.concatenate(predictions, axis=0)
+    #     labels = np.concatenate(labels, axis=0)
+        
+    #     eval_pred = (predictions, labels)
+    #     custom_metrics = self.compute_metrics(eval_pred)
+        
+    #     print(f"   Custom metrics: {custom_metrics}")
+        
+    #     # Update metrics with our custom ones
+    #     metrics.update(custom_metrics)
+        
+    #     return metrics
+
+    @staticmethod
+    def compute_metrics(eval_pred):
         """Compute accuracy for evaluation."""
         # eval_pred is a tuple containing (predictions, labels) from the model evaluation
         # predictions: numpy array of shape (num_samples, num_classes) with raw logits
         # labels: numpy array of shape (num_samples,) with true class labels
-        predictions, labels = eval_pred
+        logits, labels = eval_pred
         # axis=1 selects the class dimension (columns) to find the maximum probability
         # predictions shape: (num_samples, num_classes) -> argmax along axis=1 gives class indices
-        predictions = np.argmax(predictions, axis=1)
+        predictions = np.argmax(logits, axis=-1)
         accuracy = (predictions == labels).astype(np.float32).mean().item()
-        return {"accuracy": accuracy}
+        print(f"   Computed accuracy: {accuracy:.4f}")
+        print(f"   Predictions: {predictions}")
+        print(f"   Labels: {labels}")
+        return {"eval_accuracy": accuracy}

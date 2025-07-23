@@ -17,6 +17,7 @@ class ModelTrainer:
         preprocess_fn=None,
         data_collator=None,
         trainer_class=Trainer,
+        compute_metrics=None,
     ):
         """
         Initializes the ModelTrainer.
@@ -45,61 +46,49 @@ class ModelTrainer:
                 f"{self.training_args.logging_dir}_{timestamp}"
             )
 
-        self.train_dataset_processed = None
-        self.eval_dataset_processed = None
-
-    def _preprocess_datasets(self):
-        """Applies the preprocessing function to the raw datasets."""
-        if self.preprocess_fn:
-            print("Preprocessing datasets...")
-            self.train_dataset_processed = self.train_dataset_raw.map(
-                self.preprocess_fn, batched=True, batch_size=100
-            )
-            self.eval_dataset_processed = self.eval_dataset_raw.map(
-                self.preprocess_fn, batched=True, batch_size=100
-            )
-        else:
-            self.train_dataset_processed = self.train_dataset_raw
-            self.eval_dataset_processed = self.eval_dataset_raw
-
     def run(self):
         """
         Executes the training and evaluation process.
         """
         self._preprocess_datasets()
 
-        trainer = self.trainer_class(
-            model=self.model,
-            args=self.training_args,
-            train_dataset=self.train_dataset_processed,
-            eval_dataset=self.eval_dataset_processed,
-            data_collator=self.data_collator,
-        )
+        # Only initialize the trainer once and store it
+        if not hasattr(self, "trainer"):
+            self.trainer = self.trainer_class(
+                model=self.model,
+                args=self.training_args,
+                train_dataset=self.train_dataset_raw,
+                eval_dataset=self.eval_dataset_raw,
+                data_collator=self.data_collator,
+            )
 
         print("Starting training...")
-        train_results = trainer.train()
+        train_results = self.trainer.train()
 
         print("Evaluating model...")
-        eval_results = trainer.evaluate()
+        eval_results = self.trainer.evaluate()
 
         print(f"Train results: {train_results}")
         print(f"Eval results: {eval_results}")
-        return trainer, train_results, eval_results 
+        return self.trainer, train_results, eval_results 
     
     def evaluate(self):
         """
-        Executes the training and evaluation process.
+        Evaluates the model using the existing trainer instance.
         """
-        self._preprocess_datasets()
-
-        trainer = self.trainer_class(
-            model=self.model,
-            args=self.training_args,
-            train_dataset=self.train_dataset_processed,
-            eval_dataset=self.eval_dataset_processed,
-            data_collator=self.data_collator,
-        )
+        if not hasattr(self, "trainer"):
+            self.trainer = self.trainer_class(
+                model=self.model,
+                args=self.training_args,
+                train_dataset=self.train_dataset_raw,
+                eval_dataset=self.eval_dataset_raw,
+                data_collator=self.data_collator,
+            )
 
         print("Evaluating model...")
-        eval_results = trainer.evaluate()
+        print("Trainer attributes:")
+        for attr in dir(self.trainer):
+            if not attr.startswith("__"):
+                print(f"  {attr}: {getattr(self.trainer, attr, None)}")
+        eval_results = self.trainer.evaluate()
         return eval_results

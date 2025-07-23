@@ -83,7 +83,7 @@ def main():
         weight_decay=1e-4,  # Reduced weight decay
         warmup_steps=1000,  # Warmup for better training stability
         gradient_accumulation_steps=4,  # Reduced for more frequent updates
-        eval_steps=50,  # Less frequent evaluation
+        eval_steps=25,  # Less frequent evaluation
         logging_steps=25,  # Less frequent logging
         save_steps=500,  # Save less frequently
         seed=42,
@@ -96,7 +96,6 @@ def main():
         optim="adamw_torch",  # Explicit optimizer
         lr_scheduler_type="cosine",  # Cosine annealing scheduler
         max_grad_norm=1.0,  # Gradient clipping
-        # Evaluation settings
         eval_strategy="steps",
         save_strategy="steps",
         logging_strategy="steps",
@@ -105,6 +104,7 @@ def main():
         load_best_model_at_end=True,
         metric_for_best_model="eval_loss",
         greater_is_better=False,
+        prediction_loss_only=False,
     )
     
     print(f"\n⚙️ Training Configuration:")
@@ -140,6 +140,7 @@ def main():
 
     # Evaluate the model after training
     eval_results = trainer.evaluate()
+    print(f"   eval_results: {eval_results}")
     accuracy = eval_results.get('eval_accuracy', 0.0)
     loss = eval_results.get('eval_loss', float('inf'))
     
