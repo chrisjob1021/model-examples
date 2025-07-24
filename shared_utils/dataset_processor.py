@@ -3,6 +3,8 @@ from typing import Any, Dict, Optional, Callable
 from datetime import datetime
 import logging
 import os
+import gc
+import psutil
 
 from datasets import DatasetDict, load_dataset, concatenate_datasets, load_from_disk
 
@@ -140,7 +142,6 @@ class DatasetProcessor:
                     
                     # Try to load the maximum chunk first
                     try:
-                        from datasets import load_from_disk
                         test_dataset = load_from_disk(str(max_chunk_file))
                         expected_samples = self.chunk_size
                         actual_samples = len(test_dataset)
@@ -299,9 +300,6 @@ class DatasetProcessor:
 
     def _process_split_in_chunks(self, dataset, split_name, map_kwargs):
         """Process a dataset split in chunks to prevent resource exhaustion."""
-        import gc
-        import psutil
-        from datasets import concatenate_datasets, load_from_disk
         
         total_samples = len(dataset)
         processed_chunks = []
@@ -393,7 +391,6 @@ class DatasetProcessor:
                         self.logger.error(f"UTF-8 error during map operation - chunk indices: {chunk_start}-{chunk_end-1}")
                     raise map_error
 
-                # No need to filter - preprocessing only returns successful images
                 processed_chunks.append(processed_chunk)
                 
                 # Save progress after each chunk - save only the new chunk (not cumulative)
@@ -475,37 +472,6 @@ class DatasetProcessor:
             self.logger.info(f"Saved progress for {split_name} chunk {chunk_num} to {progress_file}")
         except Exception as e:
             self.logger.warning(f"Could not save chunk progress: {e}")
-
-    def _cleanup_progress_files(self):
-        """Clean up progress files after successful completion."""
-        progress_dir = self.output_dir / f"{self.processor_name}_progress"
-        
-        if progress_dir.exists():
-            try:
-                import shutil
-                shutil.rmtree(progress_dir)
-                self.logger.info(f"Cleaned up progress files from {progress_dir}")
-            except Exception as e:
-                self.logger.warning(f"Could not clean up progress files: {e}")
-
-    def cleanup_all_progress(self):
-        """Manually clean up all progress files (useful for corrupted chunks)."""
-        progress_dir = self.output_dir / f"{self.processor_name}_progress"
-        
-        if progress_dir.exists():
-            try:
-                import shutil
-                shutil.rmtree(progress_dir)
-                self.logger.info(f"Manually cleaned up all progress files from {progress_dir}")
-                # Reset resume info
-                self.resume_info = {}
-                return True
-            except Exception as e:
-                self.logger.error(f"Could not clean up progress files: {e}")
-                return False
-        else:
-            self.logger.info("No progress files to clean up")
-            return True
 
     def _save_dataset(self) -> Dict[str, str]:
         """Save the processed dataset to disk using HuggingFace datasets."""
@@ -625,7 +591,6 @@ class DatasetProcessor:
                 except Exception as e:
                     self.logger.warning(f"Could not cast dataset features: {e}")
 
-            # Ensure fast retrieval by setting the format to return numpy arrays
             try:
                 final_dataset.set_format(type="torch")
             except Exception as e:
@@ -664,8 +629,5 @@ class DatasetProcessor:
         
         # Save the processed dataset
         results = self._save_dataset()
-        
-        # Clean up progress files only if explicitly requested
-        # self._cleanup_progress_files()  # Commented out to preserve chunks
         
         return results
