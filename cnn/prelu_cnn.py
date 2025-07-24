@@ -11,7 +11,7 @@ you can compare the impact of PReLU on accuracy.
 import torch
 from torch import nn
 import torch.nn.functional as F
-from transformers import Trainer, EvalPrediction
+from transformers import Trainer
 import numpy as np
 from PIL import Image
 import math
@@ -456,7 +456,7 @@ def preprocess_images(examples):
             # Neural networks work better with normalized inputs, and 255.0 ensures float division
             image = image / 255.0
             
-            # Apply ImageNet normalization using tensor operations (much faster!)
+            # Apply ImageNet normalization using tensor operations
             image = (image - mean.view(3, 1, 1)) / std.view(3, 1, 1)
                 
             # Store in pre-allocated tensor
@@ -503,15 +503,10 @@ def preprocess_images(examples):
 class CNNTrainer(Trainer):
     """Custom trainer for CNN models."""
 
-    # def __init__(self, *args, **kwargs):
-    #     super().__init__(*args, compute_metrics=self.compute_metrics, compute_loss=self.compute_loss, **kwargs)
-    #     print(f"   CNNTrainer initialized successfully")
-
-    def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):        
+    def compute_loss(self, model, inputs, return_outputs=False):
         pixel_values = inputs["pixel_values"]
         labels = inputs["labels"]
 
-        # OPTIMIZED: Handle tensor format efficiently
         if not isinstance(pixel_values, torch.Tensor):
             if isinstance(pixel_values, list):
                 # Check if list contains tensors (optimized format) or numpy arrays (legacy format)
@@ -539,73 +534,3 @@ class CNNTrainer(Trainer):
         loss = loss_fn(outputs, labels)
 
         return (loss, outputs) if return_outputs else loss
-
-    # def evaluation_step(self, model, inputs):
-    #     """Override evaluation step to ensure our custom logic is used."""
-    #     print(f"🔧 evaluation_step called!")
-        
-    #     # Call the parent evaluation_step
-    #     loss, logits, labels = super().evaluation_step(model, inputs, ignore_keys=None)
-        
-    #     print(f"   evaluation_step returned - loss: {loss}, logits shape: {logits.shape}, labels shape: {labels.shape}")
-        
-    #     return loss, logits, labels
-
-    # def evaluate(self, eval_dataset=None, ignore_keys=None, metric_key_prefix="eval"):
-    #     """Override evaluate method to force our custom logic."""
-    #     # Call parent evaluate method
-    #     metrics = super().evaluate(eval_dataset, ignore_keys, metric_key_prefix)
-        
-    #     # Force our compute_metrics to be called and compute eval_loss
-    #     eval_dataloader = self.get_eval_dataloader(eval_dataset)
-    #     predictions = []
-    #     labels = []
-    #     losses = []
-        
-    #     self.model.eval()
-    #     device = next(self.model.parameters()).device
-    #     loss_fn = torch.nn.CrossEntropyLoss()
-        
-    #     with torch.no_grad():
-    #         for batch in eval_dataloader:
-    #             batch = {k: v.to(device) for k, v in batch.items()}
-    #             outputs = self.model(**batch)
-                
-    #             # Compute loss for this batch
-    #             batch_loss = loss_fn(outputs, batch["labels"])
-    #             losses.append(batch_loss.item())
-                
-    #             predictions.append(outputs.cpu().numpy())
-    #             labels.append(batch["labels"].cpu().numpy())
-        
-    #     predictions = np.concatenate(predictions, axis=0)
-    #     labels = np.concatenate(labels, axis=0)
-        
-    #     # Compute average loss
-    #     eval_loss = sum(losses) / len(losses)
-        
-    #     eval_pred = (predictions, labels)
-    #     custom_metrics = self.compute_metrics(eval_pred)
-        
-    #     # Add eval_loss to metrics
-    #     metrics["eval_loss"] = eval_loss
-        
-    #     # Update metrics with our custom ones
-    #     metrics.update(custom_metrics)
-        
-    #     return metrics
-
-    # @staticmethod
-    # def compute_metrics(eval_pred):
-    #     """Compute accuracy for evaluation."""
-    #     # Handle both tuple and EvalPrediction formats
-    #     if hasattr(eval_pred, 'predictions'):
-    #         # EvalPrediction object
-    #         logits = eval_pred.predictions
-    #         labels = eval_pred.label_ids
-    #     else:
-    #         # Tuple format (predictions, labels)
-    #         logits, labels = eval_pred
-    #     predictions = np.argmax(logits, axis=-1)
-    #     accuracy = (predictions == labels).astype(np.float32).mean().item()
-    #     return {"eval_accuracy": accuracy}
