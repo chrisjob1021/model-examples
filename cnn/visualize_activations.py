@@ -176,15 +176,28 @@ class ActivationVisualizer:
             mean_activation = act.mean(dim=(1, 2))  # Mean across spatial dims
             max_activation = act.max(dim=2)[0].max(dim=1)[0]  # Max across spatial dims
             
+            # Also calculate total activity (sum of absolute values) for better correlation
+            total_activity = act.abs().sum(dim=(1, 2))  # Total activity per channel
+            
             n_channels = len(mean_activation)
             channels = range(n_channels)
             
-            # Create bar plot
-            bar1 = ax.bar(channels, mean_activation.numpy(), alpha=0.7, label='Mean', width=0.8)
-            bar2 = ax.bar(channels, max_activation.numpy(), alpha=0.5, label='Max', width=0.8)
+            # Find top 5 most active channels for reference
+            top_5_channels = torch.argsort(total_activity, descending=True)[:5]
+            
+            # Define exact colors to avoid any matplotlib auto-styling
+            mean_color = '#1f77b4'  # matplotlib default blue
+            max_color = '#ff7f0e'   # matplotlib default orange
+            
+            # Create bar plot with exact hex colors
+            bars_mean = ax.bar(channels, mean_activation.numpy(), label='Mean', width=0.8, 
+                             color=mean_color, alpha=0.8)
+            bars_max = ax.bar(channels, max_activation.numpy(), label='Max', width=0.8, 
+                            color=max_color, alpha=0.6)
             
             # Set title and labels with proper spacing
-            ax.set_title(f'{layer_name}\nActivation Statistics', fontsize=10, pad=15)
+            ax.set_title(f'{layer_name}\nActivation Statistics\nTop 5: {[int(x) for x in top_5_channels]}', 
+                        fontsize=10, pad=15)
             ax.set_xlabel('Channel', fontsize=9)
             ax.set_ylabel('Activation', fontsize=9)
             
@@ -198,11 +211,21 @@ class ActivationVisualizer:
                 ax.tick_params(axis='x', labelsize=8)
                 ax.tick_params(axis='y', labelsize=8)
             
-            # Position legend to avoid overlap
-            ax.legend(loc='upper right', fontsize=8)
+            # Create custom legend with colors that match what's actually visible
+            from matplotlib.patches import Patch
+            legend_elements = [
+                Patch(facecolor='#8B4513', label='Mean'),  # darker orange/brown color
+                Patch(facecolor=max_color, alpha=0.6, label='Max')
+            ]
+            ax.legend(handles=legend_elements, loc='upper right', fontsize=8)
             
             # Add grid for better readability
             ax.grid(True, alpha=0.3, axis='y')
+            
+            # Debug print to console
+            print(f"\n{layer_name} - Top 5 most active channels:")
+            for i, ch in enumerate(top_5_channels[:5]):
+                print(f"  Channel {ch}: mean={mean_activation[ch]:.3f}, max={max_activation[ch]:.3f}, total={total_activity[ch]:.1f}")
             
         else:
             ax.text(0.5, 0.5, f'{layer_name}\nNon-conv layer', 
@@ -239,6 +262,8 @@ class ActivationVisualizer:
                 font_size = 8
             elif n_channels <= 64:
                 font_size = 6
+            elif n_channels <= 128:
+                font_size = 5
             else:
                 font_size = 4
             
@@ -260,7 +285,7 @@ class ActivationVisualizer:
                 im = inset_ax.imshow(feature_map, cmap='viridis', aspect='auto')
                 
                 # Add title with channel number, positioned above the subplot
-                if font_size >= 6:
+                if font_size >= 4:
                     inset_ax.set_title(f'{i}', fontsize=font_size, pad=1)
                 
                 inset_ax.axis('off')
@@ -364,8 +389,12 @@ def main():
     print(f"🔍 Visualizing sample {sample_idx}")
     print(f"   Label: {sample['labels']}")
     
-    # Convert sample to tensor
-    pixel_values = torch.tensor(sample['pixel_values'], dtype=torch.float32)
+    # Convert sample to tensor (fix warning by using proper tensor creation)
+    pixel_values = sample['pixel_values']
+    if isinstance(pixel_values, torch.Tensor):
+        pixel_values = pixel_values.detach().clone().float()
+    else:
+        pixel_values = torch.tensor(pixel_values, dtype=torch.float32)
     if pixel_values.dim() == 3:
         pixel_values = pixel_values.unsqueeze(0)  # Add batch dimension
     
