@@ -69,7 +69,7 @@ def main():
     # Create training arguments
     training_args = TrainingArguments(
         output_dir=f"./results/cnn_results_{'prelu' if use_prelu else 'relu'}",
-        num_train_epochs=10,  # More epochs for better convergence
+        num_train_epochs=90,  # More epochs for better convergence
         per_device_train_batch_size=64,  # Reduced for stability
         per_device_eval_batch_size=64,
         learning_rate=1e-3,
