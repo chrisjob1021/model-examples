@@ -503,7 +503,7 @@ def preprocess_images(examples):
 class CNNTrainer(Trainer):
     """Custom trainer for CNN models."""
 
-    def compute_loss(self, model, inputs, return_outputs=False):
+    def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
         pixel_values = inputs["pixel_values"]
         labels = inputs["labels"]
 
