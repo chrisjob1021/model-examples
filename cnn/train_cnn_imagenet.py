@@ -76,9 +76,9 @@ def main():
         weight_decay=1e-4,
         warmup_steps=1000,  # Warmup for better training stability
         gradient_accumulation_steps=4,  # Reduced for more frequent updates
-        eval_steps=25,
-        logging_steps=25,
-        save_steps=500,
+        eval_steps=500,
+        logging_steps=100,
+        save_steps=1000,
         seed=42,
         logging_dir="./logs/logs",
         # Fix for custom dataset format
