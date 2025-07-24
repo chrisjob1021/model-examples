@@ -62,7 +62,6 @@ def main():
             "validation": None,
             "test": 0
         },
-        # PERFORMANCE OPTIMIZATIONS:
         num_threads=2,
         chunk_size=250000,
         batch_size=200,
@@ -70,31 +69,15 @@ def main():
         trust_remote_code=True,
         cache_dir=None,  # Don't use cache
         concatenate_only=args.concatenate_only,  # Skip dataset loading if concatenate-only
-        # download_mode="force_redownload",  # Force redownload of the dataset
     )
     
     print(f"✅ DatasetProcessor created successfully")
     print(f"📁 Output directory: {processor.output_dir}")
     print(f"📊 Split limits: {processor.split_limits}")
     
-    if args.concatenate_only:
-        print(f"\n🔗 Concatenate-only mode: will skip dataset loading and only combine existing chunks")
-        print(f"💡 No processing of original ImageNet data will be performed")
-    else:
-        print(f"\n🔄 Processing ImageNet-1k dataset...")
-        print(f"📥 This will load the original dataset and apply preprocessing")
-    
     try:
-        results = processor.process()
-        
-        if args.concatenate_only:
-            print(f"\n✅ Chunk concatenation completed successfully!")
-        else:
-            print(f"\n✅ Dataset processing completed successfully!")
-            
-        print(f"📊 Processing Results:")
-        print(f"  Saved files: {results}")
-        
+        processor.process()
+                
         # Display dataset information
         print(f"\n📈 Dataset Information:")
         if hasattr(processor, 'processed_dataset') and processor.processed_dataset:
@@ -113,7 +96,6 @@ def main():
                     print(f"  Sample keys: {list(processor.processed_dataset[0].keys())}")
         
         print(f"\n💾 Processed dataset saved to: {processor.output_dir}")
-        print(f"📁 You can now use this processed dataset for training!")
         
     except Exception as e:
         print(f"❌ Error processing dataset: {e}")
@@ -123,7 +105,6 @@ def main():
         print(f"\n✅ ImageNet-1k chunk concatenation completed successfully!")
     else:
         print(f"\n✅ ImageNet-1k processing completed successfully!")
-    print(f"📁 Check {processor.output_dir} for processed dataset files")
 
 if __name__ == "__main__":
     main() 
