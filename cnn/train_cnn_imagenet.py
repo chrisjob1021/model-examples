@@ -99,6 +99,7 @@ def main():
         greater_is_better=False,
         prediction_loss_only=False,
         label_names=["labels"], # need this to get eval_loss
+        report_to="tensorboard",
     )
     
     print(f"\n⚙️ Training Configuration:")
