@@ -48,15 +48,30 @@ def main():
         num_classes=1000
     )
     
+    # Force fresh weight initialization to ensure clean start
+    def reset_weights(m):
+        if hasattr(m, 'reset_parameters'):
+            m.reset_parameters()
+        elif hasattr(m, 'weight'):
+            torch.nn.init.kaiming_normal_(m.weight)
+        if hasattr(m, 'bias') and m.bias is not None:
+            torch.nn.init.zeros_(m.bias)
+    
+    if True:
+        model.apply(reset_weights)
+        print("✅ Forced fresh weight initialization")
+    
     # Move model to GPU
     model = model.to(device)
     print(f"✅ Model moved to device: {device}")
     
-    # Verify model is on GPU
-    if next(model.parameters()).device != device:
-        print(f"❌ Warning: Model parameters are on {next(model.parameters()).device}, expected {device}")
+    # Verify model is on the correct CUDA device (cuda:0 if available)
+    expected_device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+    model_device = next(model.parameters()).device
+    if model_device != expected_device:
+        print(f"❌ Warning: Model parameters are on {model_device}, expected {expected_device}")
     else:
-        print(f"✅ Model parameters confirmed on {device}")
+        print(f"✅ Model parameters confirmed on {expected_device}")
     
     # Count parameters
     total_params = sum(p.numel() for p in model.parameters())
@@ -94,7 +109,7 @@ def main():
         logging_strategy="steps",
         # Model saving
         save_total_limit=3,  # Keep only 3 best checkpoints
-        load_best_model_at_end=True,
+        load_best_model_at_end=False,  # Don't load previous checkpoints
         metric_for_best_model="eval_loss",
         greater_is_better=False,
         prediction_loss_only=False,
