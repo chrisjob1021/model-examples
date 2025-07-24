@@ -32,25 +32,18 @@ def main():
     dataset = load_from_disk(dataset_path)
     
     train_dataset = dataset["train"]
-    eval_dataset = dataset["validation"].select(range(1000))
+    eval_dataset = dataset["validation"]
     
     print(f"✅ Loaded preprocessed datasets from disk")
     print(f"✅ Training samples: {len(train_dataset):,}")
     print(f"✅ Validation samples: {len(eval_dataset):,}")
-    
-    # Display dataset info for debugging
-    print(f"📊 Dataset Info:")
-    print(f"  Train dataset features: {list(train_dataset.features.keys())}")
-    print(f"  Train sample keys: {list(train_dataset[0].keys())}")
-    print(f"  Train sample pixel_values shape: {len(train_dataset[0]['pixel_values'])}")
-    print(f"  Train sample labels: {train_dataset[0]['labels']}")
     
     use_prelu = False
     
     # Create ReLU CNN model
     print(f"\n🏗️ Creating ReLU CNN model ({1000} classes)...")
     model = CNN(
-        use_prelu=use_prelu,  # Use ReLU
+        use_prelu=use_prelu,
         use_builtin_conv=True,  # Use fast PyTorch convolutions
         num_classes=1000
     )
@@ -79,19 +72,19 @@ def main():
         num_train_epochs=10,  # More epochs for better convergence
         per_device_train_batch_size=64,  # Reduced for stability
         per_device_eval_batch_size=64,
-        learning_rate=1e-3,  # Much more reasonable learning rate
-        weight_decay=1e-4,  # Reduced weight decay
+        learning_rate=1e-3,
+        weight_decay=1e-4,
         warmup_steps=1000,  # Warmup for better training stability
         gradient_accumulation_steps=4,  # Reduced for more frequent updates
-        eval_steps=25,  # Less frequent evaluation
-        logging_steps=25,  # Less frequent logging
-        save_steps=500,  # Save less frequently
+        eval_steps=25,
+        logging_steps=25,
+        save_steps=500,
         seed=42,
         logging_dir="./logs/logs",
         # Fix for custom dataset format
         remove_unused_columns=False,
         # Parallel data loading
-        dataloader_num_workers=4,  # Reduced to avoid memory issues
+        dataloader_num_workers=4,
         # Optimizer and scheduler settings
         optim="adamw_torch",  # Explicit optimizer
         lr_scheduler_type="cosine",  # Cosine annealing scheduler
@@ -105,7 +98,7 @@ def main():
         metric_for_best_model="eval_loss",
         greater_is_better=False,
         prediction_loss_only=False,
-        label_names=["labels"],
+        label_names=["labels"], # need this to get eval_loss
     )
     
     print(f"\n⚙️ Training Configuration:")
@@ -133,20 +126,7 @@ def main():
     )
     
     # Run training
-    print(f"\n🎯 Starting training...")
     trainer.run()
-    
-    # accuracy = results.get('eval_accuracy', 0.0)
-    # loss = results.get('eval_loss', float('inf'))
-
-    # # Evaluate the model after training
-    # eval_results = trainer.evaluate()
-    # accuracy = eval_results.get('eval_accuracy', 0.0)
-    # loss = eval_results.get('eval_loss', float('inf'))
-    
-    # print(f"\n📊 Final Results:")
-    # print(f"  Evaluation Accuracy: {accuracy:.4f}")
-    # print(f"  Evaluation Loss: {loss:.4f}")
     
     print(f"💾 Model saved to: {training_args.output_dir}")
     print(f"\n✅ Training completed successfully!")
