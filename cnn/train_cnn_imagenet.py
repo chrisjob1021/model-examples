@@ -81,31 +81,49 @@ def main():
     print(f"  Total parameters: {total_params:,}")
     print(f"  Trainable parameters: {trainable_params:,}")
     
+    num_gpus = torch.cuda.device_count()
+    batch_size_per_gpu = 64
+    grad_accum = 4
+    num_epochs = 90
+
+    # ------------------ calculate warm-up steps ------------------
+    images = 1_281_167                      # ImageNet-1k train set
+    eff_batch = batch_size_per_gpu * grad_accum * max(1, num_gpus)  # per-GPU × grad_acc × num_gpus
+    steps_per_epoch = (images + eff_batch - 1) // eff_batch # forces rounding up to nearest integer
+    #                                                       # The formula (a + b - 1) // b is equivalent to ceil(a / b)
+    total_steps = steps_per_epoch * num_epochs
+    warmup_steps = int(0.05 * total_steps)  # 5 %
+
     # Create training arguments
     training_args = TrainingArguments(
         output_dir=f"./results/cnn_results_{'prelu' if use_prelu else 'relu'}",
-        num_train_epochs=90,  # More epochs for better convergence
-        per_device_train_batch_size=64,  # Reduced for stability
-        per_device_eval_batch_size=64,
-        learning_rate=1e-3,
-        weight_decay=1e-4,
-        warmup_steps=1000,  # Warmup for better training stability
-        gradient_accumulation_steps=4,  # Reduced for more frequent updates
-        eval_steps=500,
+        num_train_epochs=num_epochs,  # More epochs for better convergence
+        per_device_train_batch_size=batch_size_per_gpu,  # Reduced for stability
+        per_device_eval_batch_size=batch_size_per_gpu,
+        #learning_rate=1e-3,
+        learning_rate=3e-4,
+        #weight_decay=1e-4,
+        weight_decay=0.05,
+        # warmup_steps=1000,  # Warmup for better training stability
+        warmup_steps=warmup_steps,
+        gradient_accumulation_steps=grad_accum,  # Reduced for more frequent updates
+        eval_steps=1,
         logging_steps=100,
-        save_steps=1000,
+        save_steps=1,
         seed=42,
         logging_dir="./logs/logs",
         # Fix for custom dataset format
         remove_unused_columns=False,
         # Parallel data loading
-        dataloader_num_workers=4,
+        dataloader_num_workers=8,
         # Optimizer and scheduler settings
         optim="adamw_torch",  # Explicit optimizer
+        # optim_args="momentum=0.9",
         lr_scheduler_type="cosine",  # Cosine annealing scheduler
-        max_grad_norm=1.0,  # Gradient clipping
-        eval_strategy="steps",
-        save_strategy="steps",
+        #max_grad_norm=1.0,  # Gradient clipping
+        max_grad_norm=0,
+        eval_strategy="epoch",
+        save_strategy="epoch",
         logging_strategy="steps",
         # Model saving
         save_total_limit=3,  # Keep only 3 best checkpoints
@@ -116,6 +134,7 @@ def main():
         label_names=["labels"], # need this to get eval_loss
         report_to="tensorboard",
     )
+
     
     print(f"\n⚙️ Training Configuration:")
     print(f"  Epochs: {training_args.num_train_epochs}")
