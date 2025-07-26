@@ -2,8 +2,9 @@
 """Train ReLU CNN on ImageNet using ModelTrainer"""
 
 import torch
-from datasets import load_from_disk
+from datasets import load_from_disk, load_dataset
 from transformers import TrainingArguments
+import torchvision.transforms as T
 
 # Import from shared_utils package
 from shared_utils import ModelTrainer
@@ -27,12 +28,50 @@ def main():
     # Load preprocessed ImageNet dataset from disk
     print("🔄 Loading preprocessed datasets from disk...")
     
-    # Load training dataset
-    dataset_path = "./processed_datasets/imagenet_processor"
-    dataset = load_from_disk(dataset_path)
-    
-    train_dataset = dataset["train"]
-    eval_dataset = dataset["validation"]
+    if False:
+        # Load training dataset
+        dataset_path = "./processed_datasets/imagenet_processor"
+        dataset = load_from_disk(dataset_path)
+        
+        train_dataset = dataset["train"]
+        eval_dataset = dataset["validation"]
+    else:
+        train_dataset = load_dataset("imagenet-1k", split="train")
+        eval_dataset = load_dataset("imagenet-1k", split="validation")
+
+        mean = [0.485, 0.456, 0.406]
+        std  = [0.229, 0.224, 0.225]
+
+        # Define the data augmentation and preprocessing pipeline for training images
+        train_transform = T.Compose([
+            T.RandomResizedCrop(224, scale=(0.08, 1.0)),      # Randomly crop and resize to 224x224 (simulates zoom/scale)
+            T.RandomHorizontalFlip(),                         # Randomly flip images horizontally (augmentation)
+            T.RandAugment(num_ops=2, magnitude=9),            # Apply 2 random augmentations with magnitude 9 (extra augmentation)
+            T.ToTensor(),                                     # Convert PIL Image or numpy.ndarray to tensor and scale to [0, 1]
+            T.Normalize(mean, std),                           # Normalize using ImageNet mean and std
+            T.RandomErasing(p=0.25, scale=(0.02, 0.1)),       # Randomly erase a rectangle region (extra augmentation, 25% chance)
+        ])
+        
+        # Define the preprocessing pipeline for evaluation images (no heavy augmentation)
+        eval_transform = T.Compose([
+            T.Resize(256),                                    # Resize shorter side to 256 pixels
+            T.CenterCrop(224),                                # Crop the center 224x224 region
+            T.ToTensor(),                                     # Convert to tensor and scale to [0, 1]
+            T.Normalize(mean, std),                           # Normalize using ImageNet mean and std
+        ])
+
+        def train_transform_fn(example):
+            img = example["image"].convert("RGB")
+            example["pixel_values"] = train_transform(img)
+            return example
+        
+        def eval_transform_fn(example):
+            img = example["image"].convert("RGB")
+            example["pixel_values"] = eval_transform(img)
+            return example
+        
+        train_dataset = train_dataset.with_transform(train_transform_fn)
+        eval_dataset = eval_dataset.with_transform(eval_transform_fn)
     
     print(f"✅ Loaded preprocessed datasets from disk")
     print(f"✅ Training samples: {len(train_dataset):,}")
@@ -103,7 +142,7 @@ def main():
         #learning_rate=1e-3,
         learning_rate=3e-4,
         #weight_decay=1e-4,
-        weight_decay=0.05,
+        weight_decay=0.1, # weight_decay=0.05 is common for ViTs, but deep CNNs with no BN weight-decay exemption often work better at 0.1 – 0.15. 
         # warmup_steps=1000,  # Warmup for better training stability
         warmup_steps=warmup_steps,
         gradient_accumulation_steps=grad_accum,  # Reduced for more frequent updates
@@ -119,7 +158,8 @@ def main():
         # Optimizer and scheduler settings
         optim="adamw_torch",  # Explicit optimizer
         # optim_args="momentum=0.9",
-        lr_scheduler_type="cosine",  # Cosine annealing scheduler
+        lr_scheduler_type="cosine_with_min_lr",
+        lr_scheduler_kwargs={"min_lr_ratio": 0.1},  # 10% of base LR as minimum
         #max_grad_norm=1.0,  # Gradient clipping
         max_grad_norm=0,
         eval_strategy="epoch",
@@ -131,7 +171,7 @@ def main():
         metric_for_best_model="eval_loss",
         greater_is_better=False,
         prediction_loss_only=False,
-        label_names=["labels"], # need this to get eval_loss
+        label_names=["label"], # need this to get eval_loss
         report_to="tensorboard",
     )
 
