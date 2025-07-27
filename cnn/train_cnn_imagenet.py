@@ -2,7 +2,7 @@
 """Train ReLU CNN on ImageNet using ModelTrainer"""
 
 import torch
-from datasets import load_from_disk, load_dataset
+from datasets import load_from_disk, load_dataset, Dataset
 from transformers import TrainingArguments
 import torchvision.transforms as T
 
@@ -11,19 +11,32 @@ from shared_utils import ModelTrainer
 
 from prelu_cnn import CNN, CNNTrainer
 
-class SafeImageNetDataset:
+class SafeImageNetDataset(Dataset):
     """
     Wrapper for ImageNet dataset that safely handles EXIF errors on-demand.
+    Extends HuggingFace Dataset class to maintain compatibility.
     """
     def __init__(self, dataset, transform_fn=None):
+        # Don't call super().__init__() to avoid Dataset initialization issues
         self.dataset = dataset
         self.transform_fn = transform_fn
         self.skipped_count = 0
+        
+        # Copy over essential internal attributes from the underlying dataset
+        for attr in ['_data', '_info', '_split', '_indices', '_fingerprint']:
+            if hasattr(dataset, attr):
+                setattr(self, attr, getattr(dataset, attr))
     
     def __len__(self):
         return len(self.dataset)
     
-    def __getitem__(self, idx):
+    def __getitem__(self, key):
+        # Handle column access (string key) - delegate to underlying dataset
+        if isinstance(key, str):
+            return self.dataset[key]
+                
+        # Handle row access (integer index) with error handling
+        idx = key
         try:
             item = self.dataset[idx]
             
@@ -45,6 +58,10 @@ class SafeImageNetDataset:
             'pixel_values': torch.zeros(3, 224, 224),
             'label': 0
         }
+    
+    def __getattr__(self, name):
+        """Delegate attribute access to the underlying dataset."""
+        return getattr(self.dataset, name)
 
 def main():
     """Train ReLU CNN on ImageNet."""
@@ -116,13 +133,17 @@ def main():
             # Single example processing
             examples["pixel_values"] = eval_transform(examples["image"])
 
+        # There's some craziness going on within HuggingFace Trainer that requires this hack
+        examples["labels"] = examples["label"]
+        del examples["label"]
+
         # Remove the original image to avoid DataLoader issues
         del examples["image"]
         return examples
 
     # Wrap datasets with safe wrapper to handle EXIF errors on-demand
     train_dataset = SafeImageNetDataset(train_dataset, train_transform_fn)
-    eval_dataset = SafeImageNetDataset(eval_dataset, eval_transform_fn)
+    eval_dataset = eval_dataset.with_transform(eval_transform_fn).select(range(1000))
     
     print(f"✅ Loaded datasets with safe EXIF error handling")
     print(f"✅ Training samples: {len(train_dataset):,}")
@@ -230,7 +251,7 @@ def main():
         metric_for_best_model="eval_loss",
         greater_is_better=False,
         prediction_loss_only=False,
-        label_names=["label"], # need this to get eval_loss
+        label_names=["labels"], # need this to get eval_loss
         report_to="tensorboard",
     )
 
