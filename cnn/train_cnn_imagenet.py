@@ -39,36 +39,54 @@ def main():
         mean = [0.485, 0.456, 0.406]
         std  = [0.229, 0.224, 0.225]
 
-        # Define the data augmentation and preprocessing pipeline for training images
-        train_transform = T.Compose([
-            T.RandomResizedCrop(224, scale=(0.08, 1.0)),      # Randomly crop and resize to 224x224 (simulates zoom/scale)
-            T.RandomHorizontalFlip(),                         # Randomly flip images horizontally (augmentation)
-            T.RandAugment(num_ops=2, magnitude=9),            # Apply 2 random augmentations with magnitude 9 (extra augmentation)
-            T.ToTensor(),                                     # Convert PIL Image or numpy.ndarray to tensor and scale to [0, 1]
-            T.Normalize(mean, std),                           # Normalize using ImageNet mean and std
-            T.RandomErasing(p=0.25, scale=(0.02, 0.1)),       # Randomly erase a rectangle region (extra augmentation, 25% chance)
-        ])
-        
-        # Define the preprocessing pipeline for evaluation images (no heavy augmentation)
-        eval_transform = T.Compose([
-            T.Resize(256),                                    # Resize shorter side to 256 pixels
-            T.CenterCrop(224),                                # Crop the center 224x224 region
-            T.ToTensor(),                                     # Convert to tensor and scale to [0, 1]
-            T.Normalize(mean, std),                           # Normalize using ImageNet mean and std
-        ])
+    # Define the data augmentation and preprocessing pipeline for training images
+    train_transform = T.Compose([
+        T.Lambda(lambda x: x.convert('RGB') if x.mode != 'RGB' else x),  # Ensure 3 channels (convert grayscale to RGB)
+        T.RandomResizedCrop(224, scale=(0.08, 1.0)),      # Randomly crop and resize to 224x224 (simulates zoom/scale)
+        T.RandomHorizontalFlip(),                         # Randomly flip images horizontally (augmentation)
+        T.RandAugment(num_ops=2, magnitude=9),            # Apply 2 random augmentations with magnitude 9 (extra augmentation)
+        T.ToTensor(),                                     # Convert PIL Image or numpy.ndarray to tensor and scale to [0, 1]
+        T.Normalize(mean, std),                           # Normalize using ImageNet mean and std
+        T.RandomErasing(p=0.25, scale=(0.02, 0.1)),       # Randomly erase a rectangle region (extra augmentation, 25% chance)
+    ])
 
-        def train_transform_fn(example):
-            img = example["image"].convert("RGB")
-            example["pixel_values"] = train_transform(img)
-            return example
-        
-        def eval_transform_fn(example):
-            img = example["image"].convert("RGB")
-            example["pixel_values"] = eval_transform(img)
-            return example
-        
-        train_dataset = train_dataset.with_transform(train_transform_fn)
-        eval_dataset = eval_dataset.with_transform(eval_transform_fn)
+    # Define the preprocessing pipeline for evaluation images (no heavy augmentation)
+    eval_transform = T.Compose([
+        T.Lambda(lambda x: x.convert('RGB') if x.mode != 'RGB' else x),  # Ensure 3 channels (convert grayscale to RGB)
+        T.Resize(256),                                    # Resize shorter side to 256 pixels
+        T.CenterCrop(224),                                # Crop the center 224x224 region
+        T.ToTensor(),                                     # Convert to tensor and scale to [0, 1]
+        T.Normalize(mean, std),                           # Normalize using ImageNet mean and std
+    ])
+
+    def train_transform_fn(examples):
+        # Handle both single examples and batches
+        if isinstance(examples['image'], list):
+            # Batch processing
+            examples["pixel_values"] = [train_transform(image) for image in examples["image"]]
+        else:
+            # Single example processing  
+            examples["pixel_values"] = train_transform(examples["image"])
+
+        # Remove the original image to avoid DataLoader issues
+        del examples["image"]
+        return examples
+
+    def eval_transform_fn(examples):
+        # Handle both single examples and batches
+        if isinstance(examples['image'], list):
+            # Batch processing
+            examples["pixel_values"] = [eval_transform(image) for image in examples["image"]]
+        else:
+            # Single example processing
+            examples["pixel_values"] = eval_transform(examples["image"])
+
+        # Remove the original image to avoid DataLoader issues
+        del examples["image"]
+        return examples
+
+    train_dataset = train_dataset.with_transform(train_transform_fn)
+    eval_dataset = eval_dataset.with_transform(eval_transform_fn)
     
     print(f"✅ Loaded preprocessed datasets from disk")
     print(f"✅ Training samples: {len(train_dataset):,}")
@@ -156,7 +174,7 @@ def main():
         optim="adamw_torch",  # Explicit optimizer
         # optim_args="momentum=0.9",
         lr_scheduler_type="cosine_with_min_lr",
-        lr_scheduler_kwargs={"min_lr_ratio": 0.1},  # 10% of base LR as minimum
+        lr_scheduler_kwargs={"min_lr_rate": 0.1},  # 10% of base LR as minimum
         #max_grad_norm=1.0,  # Gradient clipping
         max_grad_norm=0,
         eval_strategy="epoch",
