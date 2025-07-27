@@ -25,9 +25,6 @@ def main():
         print(f"GPU: {torch.cuda.get_device_name()}")
         print(f"GPU Memory: {torch.cuda.get_device_properties(0).total_memory / 1e9:.1f} GB")
     
-    # Load preprocessed ImageNet dataset from disk
-    print("🔄 Loading preprocessed datasets from disk...")
-    
     if False:
         # Load training dataset
         dataset_path = "./processed_datasets/imagenet_processor"
