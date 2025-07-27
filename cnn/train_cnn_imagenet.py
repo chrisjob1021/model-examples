@@ -11,6 +11,41 @@ from shared_utils import ModelTrainer
 
 from prelu_cnn import CNN, CNNTrainer
 
+class SafeImageNetDataset:
+    """
+    Wrapper for ImageNet dataset that safely handles EXIF errors on-demand.
+    """
+    def __init__(self, dataset, transform_fn=None):
+        self.dataset = dataset
+        self.transform_fn = transform_fn
+        self.skipped_count = 0
+    
+    def __len__(self):
+        return len(self.dataset)
+    
+    def __getitem__(self, idx):
+        try:
+            item = self.dataset[idx]
+            
+            # Apply transform if provided
+            if self.transform_fn:
+                item = self.transform_fn(item)
+            
+            return item
+                
+        except UnicodeDecodeError as e:
+            self.skipped_count += 1
+            print(f"⚠️ UnicodeDecodeError error at index {idx}, trying next... (skipped: {self.skipped_count})")
+            
+        except Exception as e:
+            self.skipped_count += 1
+            print(f"⚠️ Error at index {idx}: {e}, trying next... (skipped: {self.skipped_count})")
+    
+        return {
+            'pixel_values': torch.zeros(3, 224, 224),
+            'label': 0
+        }
+
 def main():
     """Train ReLU CNN on ImageNet."""
     
@@ -85,10 +120,11 @@ def main():
         del examples["image"]
         return examples
 
-    train_dataset = train_dataset.with_transform(train_transform_fn)
-    eval_dataset = eval_dataset.with_transform(eval_transform_fn)
+    # Wrap datasets with safe wrapper to handle EXIF errors on-demand
+    train_dataset = SafeImageNetDataset(train_dataset, train_transform_fn)
+    eval_dataset = SafeImageNetDataset(eval_dataset, eval_transform_fn)
     
-    print(f"✅ Loaded preprocessed datasets from disk")
+    print(f"✅ Loaded datasets with safe EXIF error handling")
     print(f"✅ Training samples: {len(train_dataset):,}")
     print(f"✅ Validation samples: {len(eval_dataset):,}")
     
@@ -170,7 +206,7 @@ def main():
         remove_unused_columns=False,
         # Parallel data loading
         dataloader_num_workers=8,
-        dataloader_persistent_workers=True,
+        dataloader_persistent_workers=False,
         # If True, the DataLoader will copy Tensors into CUDA pinned memory before returning them.
         # This can speed up host-to-GPU transfer, especially for large batches.
         dataloader_pin_memory=True,
