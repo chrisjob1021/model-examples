@@ -170,6 +170,14 @@ def main():
         remove_unused_columns=False,
         # Parallel data loading
         dataloader_num_workers=8,
+        dataloader_persistent_workers=True,
+        # If True, the DataLoader will copy Tensors into CUDA pinned memory before returning them.
+        # This can speed up host-to-GPU transfer, especially for large batches.
+        dataloader_pin_memory=True,
+        # This argument, when set to True, ensures that training always starts from the beginning of the dataset,
+        # even if a checkpoint is provided. It disables fast-forwarding/skipping of data that would otherwise occur
+        # when resuming from a checkpoint, which is useful for reproducibility or when using custom datasets.
+        #ignore_data_skip=True,
         # Optimizer and scheduler settings
         optim="adamw_torch",  # Explicit optimizer
         # optim_args="momentum=0.9",
