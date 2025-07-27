@@ -59,6 +59,27 @@ class SafeImageNetDataset(Dataset):
             'label': 0
         }
     
+    def __getitems__(self, indices):
+        """Handle batch loading for efficient DataLoader operation."""
+        batch = []
+        for idx in indices:
+            try:
+                item = self.dataset[idx]
+                
+                # Apply transform if provided
+                if self.transform_fn:
+                    item = self.transform_fn(item)
+                
+                batch.append(item)
+            except Exception as e:
+                self.skipped_count += 1
+                print(f"⚠️ Error at index {idx}: {e}, using fallback... (skipped: {self.skipped_count})")
+                batch.append({
+                    'pixel_values': torch.zeros(3, 224, 224),
+                    'label': 0
+                })
+        return batch
+    
     def __getattr__(self, name):
         """Delegate attribute access to the underlying dataset."""
         return getattr(self.dataset, name)
@@ -143,7 +164,7 @@ def main():
 
     # Wrap datasets with safe wrapper to handle EXIF errors on-demand
     train_dataset = SafeImageNetDataset(train_dataset, train_transform_fn)
-    eval_dataset = eval_dataset.with_transform(eval_transform_fn).select(range(1000))
+    eval_dataset = eval_dataset.with_transform(eval_transform_fn)
     
     print(f"✅ Loaded datasets with safe EXIF error handling")
     print(f"✅ Training samples: {len(train_dataset):,}")
