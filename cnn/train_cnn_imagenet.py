@@ -233,9 +233,10 @@ def main():
         per_device_train_batch_size=batch_size_per_gpu,  # Reduced for stability
         per_device_eval_batch_size=batch_size_per_gpu,
         #learning_rate=1e-3,
-        learning_rate=3e-4,
-        #weight_decay=1e-4,
-        weight_decay=0.1, # weight_decay=0.05 is common for ViTs, but deep CNNs with no BN weight-decay exemption often work better at 0.1 – 0.15. 
+        #learning_rate=3e-4,
+        learning_rate=0.1,
+        weight_decay=1e-4,
+        #weight_decay=0.1, # weight_decay=0.05 is common for ViTs, but deep CNNs with no BN weight-decay exemption often work better at 0.1 – 0.15. 
         # warmup_steps=1000,  # Warmup for better training stability
         warmup_steps=warmup_steps,
         gradient_accumulation_steps=grad_accum,  # Reduced for more frequent updates
