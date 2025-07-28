@@ -260,8 +260,8 @@ def main():
         # Optimizer and scheduler settings
         optim="sgd",  # SGD optimizer
         optim_args="momentum=0.9",
-        lr_scheduler_type="cosine_with_min_lr",
-        lr_scheduler_kwargs={"min_lr_rate": 0.1},  # 10% of base LR as minimum
+        lr_scheduler_type="cosine",  # Cosine annealing to 0 (better for SGD)
+        # lr_scheduler_kwargs={"min_lr_rate": 0.1},  # Not needed for cosine
         #max_grad_norm=1.0,  # Gradient clipping
         max_grad_norm=0,
         eval_strategy="epoch",

@@ -535,8 +535,8 @@ class CNNTrainer(Trainer):
         
         # Fix for HuggingFace Trainer gradient accumulation scaling bug
         # Trainer scales logged loss by gradient_accumulation_steps, but actual training uses unscaled loss
-        # Access training args if available to get gradient_accumulation_steps
-        if hasattr(self, 'args') and hasattr(self.args, 'gradient_accumulation_steps'):
+        # Only apply this fix during training, not during evaluation
+        if model.training and hasattr(self, 'args') and hasattr(self.args, 'gradient_accumulation_steps'):
             # Only scale for logging, not for actual training gradients
             if self.args.gradient_accumulation_steps > 1:
                 # This ensures logged loss shows the correct per-sample loss
