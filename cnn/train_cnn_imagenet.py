@@ -189,7 +189,7 @@ def main():
         if hasattr(m, 'bias') and m.bias is not None:
             torch.nn.init.zeros_(m.bias)
     
-    if True:
+    if False:
         model.apply(reset_weights)
         print("✅ Forced fresh weight initialization")
     
@@ -257,8 +257,8 @@ def main():
         # when resuming from a checkpoint, which is useful for reproducibility or when using custom datasets.
         #ignore_data_skip=True,
         # Optimizer and scheduler settings
-        optim="adamw_torch",  # Explicit optimizer
-        # optim_args="momentum=0.9",
+        optim="sgd",  # SGD optimizer
+        optim_args="momentum=0.9",
         lr_scheduler_type="cosine_with_min_lr",
         lr_scheduler_kwargs={"min_lr_rate": 0.1},  # 10% of base LR as minimum
         #max_grad_norm=1.0,  # Gradient clipping
