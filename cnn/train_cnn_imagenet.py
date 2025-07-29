@@ -235,8 +235,7 @@ def main():
         #learning_rate=1e-3,
         #learning_rate=3e-4,
         learning_rate=0.1,
-        weight_decay=1e-4,
-        #weight_decay=0.1, # weight_decay=0.05 is common for ViTs, but deep CNNs with no BN weight-decay exemption often work better at 0.1 – 0.15. 
+        weight_decay=0.1, # weight_decay=0.05 is common for ViTs, but deep CNNs with no BN weight-decay exemption often work better at 0.1 – 0.15. 
         # warmup_steps=1000,  # Warmup for better training stability
         warmup_steps=warmup_steps,
         gradient_accumulation_steps=grad_accum,  # Reduced for more frequent updates
@@ -260,8 +259,8 @@ def main():
         # Optimizer and scheduler settings
         optim="sgd",  # SGD optimizer
         optim_args="momentum=0.9",
-        lr_scheduler_type="cosine",  # Cosine annealing to 0 (better for SGD)
-        # lr_scheduler_kwargs={"min_lr_rate": 0.1},  # Not needed for cosine
+        lr_scheduler_type="cosine_with_min_lr",  # Cosine annealing to 0 (better for SGD)
+        lr_scheduler_kwargs={"min_lr_rate": 0.1},  # Not needed for cosine
         #max_grad_norm=1.0,  # Gradient clipping
         max_grad_norm=0,
         eval_strategy="epoch",
