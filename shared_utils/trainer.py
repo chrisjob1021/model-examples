@@ -19,6 +19,7 @@ class ModelTrainer:
         trainer_class=Trainer,
         compute_metrics=None,
         compute_loss=None,
+        callbacks=None,
     ):
         """
         Initializes the ModelTrainer.
@@ -41,6 +42,7 @@ class ModelTrainer:
         self.trainer_class = trainer_class
         self.compute_metrics = compute_metrics
         self.compute_loss = compute_loss
+        self.callbacks = callbacks
 
         # Add timestamp to logging_dir to prevent overwriting logs
         if self.training_args.logging_dir:
@@ -62,6 +64,7 @@ class ModelTrainer:
                 train_dataset=self.train_dataset_raw,
                 eval_dataset=self.eval_dataset_raw,
                 data_collator=self.data_collator,
+                callbacks=self.callbacks,
             )
 
         print("Starting training...")
@@ -85,6 +88,7 @@ class ModelTrainer:
                 train_dataset=self.train_dataset_raw,
                 eval_dataset=self.eval_dataset_raw,
                 data_collator=self.data_collator,
+                callbacks=self.callbacks,
             )
 
         print("Evaluating model...")
