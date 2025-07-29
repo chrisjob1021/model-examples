@@ -252,7 +252,7 @@ def main():
     print(f"  Trainable parameters: {trainable_params:,}")
     
     num_gpus = torch.cuda.device_count()
-    batch_size_per_gpu = 64
+    batch_size_per_gpu = 128
     grad_accum = 4
     num_epochs = 90
 
@@ -262,7 +262,7 @@ def main():
     steps_per_epoch = (images + eff_batch - 1) // eff_batch # forces rounding up to nearest integer
     #                                                       # The formula (a + b - 1) // b is equivalent to ceil(a / b)
     total_steps = steps_per_epoch * num_epochs
-    warmup_steps = int(0.05 * total_steps)  # 5 %
+    warmup_steps = int(0.1 * total_steps)  # 10 %
 
     # Create training arguments
     training_args = TrainingArguments(

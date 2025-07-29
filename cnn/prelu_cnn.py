@@ -530,8 +530,8 @@ class CNNTrainer(Trainer):
         labels = labels.to(model_device)
 
         outputs = model(pixel_values)
-        #loss_fn = nn.CrossEntropyLoss(label_smoothing=0.1)
-        loss_fn = nn.CrossEntropyLoss()
+        loss_fn = nn.CrossEntropyLoss(label_smoothing=0.05)
+        # loss_fn = nn.CrossEntropyLoss()
         loss = loss_fn(outputs, labels)
         
         # Fix for HuggingFace Trainer gradient accumulation scaling bug
