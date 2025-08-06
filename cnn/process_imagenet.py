@@ -1,5 +1,23 @@
 #!/usr/bin/env python3
-"""Process ImageNet-1k dataset using DatasetProcessor"""
+"""Process ImageNet-1k dataset using DatasetProcessor
+
+Usage:
+    python process_imagenet.py [OPTIONS]
+    
+Options:
+    --concatenate-only    Only concatenate existing progress chunks, don't process new data
+                         (useful for resuming interrupted processing and when you're short on disk space)
+
+Example:
+    # Process the full ImageNet dataset
+    python process_imagenet.py
+    
+    # Resume from existing chunks if processing was interrupted
+    python process_imagenet.py --concatenate-only
+
+Note: All other parameters (output_dir, batch_size, chunk_size, etc.) are configured
+      in the script. Modify the DatasetProcessor initialization if needed.
+"""
 
 import torch
 import logging
