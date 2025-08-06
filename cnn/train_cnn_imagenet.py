@@ -214,9 +214,9 @@ def main():
     print(f"  Trainable parameters: {trainable_params:,}")
     
     num_gpus = torch.cuda.device_count()
-    batch_size_per_gpu = 128
+    batch_size_per_gpu = 64
     grad_accum = 4
-    num_epochs = 90
+    num_epochs = 180
 
     # ------------------ calculate warm-up steps ------------------
     images = 1_281_167                      # ImageNet-1k train set
@@ -232,41 +232,28 @@ def main():
         num_train_epochs=num_epochs,  # More epochs for better convergence
         per_device_train_batch_size=batch_size_per_gpu,  # Reduced for stability
         per_device_eval_batch_size=batch_size_per_gpu,
-        #learning_rate=1e-3,
-        #learning_rate=3e-4,
-        learning_rate=0.01,  # Start with 0.01 as in PReLU paper
-        # The paper used weight_decay=0.0001 (1e-4).However, for deep CNNs without BN, some practitioners use higher values (0.0005).
-        weight_decay=0.0005,
-        #weight_decay=0.1, # weight_decay=0.05 is common for ViTs, but deep CNNs with no BN weight-decay exemption often work better at 0.1 – 0.15. 
-        # warmup_steps=1000,  # Warmup for better training stability
+        learning_rate=0.1,
+        weight_decay=1e-4,
         warmup_steps=warmup_steps,
-        gradient_accumulation_steps=grad_accum,  # Reduced for more frequent updates
+        gradient_accumulation_steps=grad_accum,
         eval_steps=1,
         logging_steps=100,
         save_steps=1,
         seed=42,
         logging_dir="./logs/logs",
-        # Fix for custom dataset format
-        remove_unused_columns=False,
-        # Parallel data loading
-        dataloader_num_workers=8,
+        remove_unused_columns=False, # Fix for custom dataset format
+        dataloader_num_workers=8, # Parallel data loading
         dataloader_persistent_workers=False,
-        # If True, the DataLoader will copy Tensors into CUDA pinned memory before returning them.
-        # This can speed up host-to-GPU transfer, especially for large batches.
-        dataloader_pin_memory=True,
-        # This argument, when set to True, ensures that training always starts from the beginning of the dataset,
-        # even if a checkpoint is provided. It disables fast-forwarding/skipping of data that would otherwise occur
-        # when resuming from a checkpoint, which is useful for reproducibility or when using custom datasets.
-        #ignore_data_skip=True,
-        # Optimizer and scheduler settings
-        optim="sgd",  # SGD optimizer
+        dataloader_pin_memory=True,     # If True, the DataLoader will copy Tensors into CUDA pinned memory before returning them.
+                                        # This can speed up host-to-GPU transfer, especially for large batches.
+        optim="sgd",
         optim_args="momentum=0.9",
-        #max_grad_norm=1.0,  # Gradient clipping
-        max_grad_norm=0,
+        max_grad_norm=0,                # No gradient clipping (max_grad_norm=0): For CNNs, gradient clipping is usually not required,
+                                        # as exploding gradients are less common compared to RNNs/transformers.
+        lr_scheduler_type="cosine",     # Cosine annealing to 0 (better for SGD)
         eval_strategy="epoch",
         save_strategy="epoch",
         logging_strategy="steps",
-        # Model saving
         save_total_limit=3,  # Keep only 3 best checkpoints
         load_best_model_at_end=False,  # Don't load previous checkpoints
         metric_for_best_model="eval_loss",
