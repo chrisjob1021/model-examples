@@ -11,44 +11,6 @@ from shared_utils import ModelTrainer
 
 from prelu_cnn import CNN, CNNTrainer
 
-class StepLRSchedulerCallback(TrainerCallback):
-    """Custom callback to implement step-wise learning rate decay at specific epochs."""
-    
-    def __init__(self, decay_epochs=[30, 60, 80], decay_factor=0.1):
-        self.decay_epochs = decay_epochs
-        self.decay_factor = decay_factor
-        self.original_lr = None
-        self.current_decay_level = 0
-        
-    def on_train_begin(self, args, state, control, **kwargs):
-        """Store the original learning rate at the start of training."""
-        self.original_lr = args.learning_rate
-        print(f"📊 Step LR Scheduler initialized:")
-        print(f"   Initial LR: {self.original_lr}")
-        print(f"   Decay epochs: {self.decay_epochs}")
-        print(f"   Decay factor: {self.decay_factor}")
-        
-    def on_epoch_begin(self, args, state, control, **kwargs):
-        """Check if we need to decay the learning rate at the start of each epoch."""
-        current_epoch = state.epoch
-        
-        # Example values:
-        #   self.decay_epochs = [30, 60, 80]
-        #   current_epoch = 65
-        #   decay_level = sum(1 for epoch in [30, 60, 80] if 65 >= epoch) = 2
-        decay_level = sum(1 for epoch in self.decay_epochs if current_epoch >= epoch)
-        
-        if decay_level > self.current_decay_level:
-            self.current_decay_level = decay_level
-            new_lr = self.original_lr * (self.decay_factor ** decay_level)
-            
-            # Update the learning rate in the optimizer
-            for param_group in kwargs['optimizer'].param_groups:
-                param_group['lr'] = new_lr
-                
-            print(f"\n📉 Learning rate decayed at epoch {int(current_epoch)}:")
-            print(f"   New LR: {new_lr} (decay level: {decay_level})")
-
 class SafeImageNetDataset(Dataset):
     """
     Wrapper for ImageNet dataset that safely handles EXIF errors on-demand.
@@ -299,18 +261,6 @@ def main():
         # Optimizer and scheduler settings
         optim="sgd",  # SGD optimizer
         optim_args="momentum=0.9",
-        # lr_scheduler_type="cosine_with_min_lr",  # Use cosine LR with min_lr_rate
-        # lr_scheduler_kwargs={"min_lr_rate": 0.1},  # Not needed for current step-wise scheduler
-        #   Added StepLRSchedulerCallback: This custom callback implements the step decay:
-        #     - Decays learning rate by 10x at epochs 30, 60, and 80
-        #     - So LR progression will be: 0.01 → 0.001 → 0.0001 → 0.00001
-
-        #   The scheduler will:
-        #   - Start at LR = 0.01
-        #   - At epoch 30: LR = 0.001 (0.01 × 0.1)
-        #   - At epoch 60: LR = 0.0001 (0.01 × 0.1²)
-        #   - At epoch 80: LR = 0.00001 (0.01 × 0.1³)
-        lr_scheduler_type="constant_with_warmup",  # Use constant LR with manual drops
         #max_grad_norm=1.0,  # Gradient clipping
         max_grad_norm=0,
         eval_strategy="epoch",
@@ -344,19 +294,12 @@ def main():
     # Create trainer using ModelTrainer
     print(f"\n🏋️ Setting up trainer...")
     
-    # Create step LR scheduler callback
-    step_lr_callback = StepLRSchedulerCallback(
-        decay_epochs=[30, 60, 80],  # Decay at these epochs
-        decay_factor=0.1  # Multiply LR by 0.1 at each decay
-    )
-    
     trainer = ModelTrainer(
         model=model,
         training_args=training_args,
         train_dataset=train_dataset,
         eval_dataset=eval_dataset,
         trainer_class=CNNTrainer,
-        callbacks=[step_lr_callback],  # Add the step scheduler callback
     )
     
     # Run training
