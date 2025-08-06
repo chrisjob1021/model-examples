@@ -41,7 +41,7 @@ The implementation includes educational features such as manual convolution/pool
   - Comprehensive data augmentation pipeline (RandomResizedCrop, RandAugment, etc.)
   - Handles common ImageNet issues (EXIF errors, corrupted images)
   - Saves training logs to `logs/<date>_<timestamp>/` for TensorBoard visualization
-  - Saves model checkpoints to `./output/`
+  - Saves model checkpoints to `./results`
   - Run: `python train_cnn_imagenet.py`
 
 ### Analysis & Visualization
@@ -75,7 +75,7 @@ The implementation includes educational features such as manual convolution/pool
 ### Environment Setup
 ```bash
 # Set up Python virtual environment with all dependencies
-cd .. && ./scripts/setup_venv.sh && cd cnn/
+scripts/setup_venv.sh
 
 # The setup script will:
 # - Create a Python virtual environment
@@ -106,15 +106,12 @@ python train_cnn_imagenet.py
 ### 2. Monitor Training
 ```bash
 # Start TensorBoard to visualize training progress
-cd .. && ./scripts/start_tensorboard.sh && cd cnn/
+scripts/start_tensorboard.sh
 
 # The script automatically:
 # - Finds and displays available log directories
 # - Starts TensorBoard on port 6006
 # - Opens http://localhost:6006 in your browser
-
-# Or manually run TensorBoard
-tensorboard --logdir logs/
 ```
 
 ## Key Features
@@ -136,16 +133,9 @@ See `requirements.txt` in the parent directory for dependencies. Key packages:
 - NumPy
 - Matplotlib (for visualization)
 
-## Configuration
-
-Most scripts support command-line arguments. Use `--help` to see available options:
-```bash
-python train_cnn_imagenet.py --help
-```
-
 ## Notes
 
 - The manual convolution/pooling implementations are for educational purposes and will be slower than PyTorch's optimized versions
 - Set `use_builtin_conv=True` in the CNN model for production use
-- The ImageNet-1k dataset requires significant storage space (~150GB)
+- The ImageNet-1k dataset requires significant storage space
 - GPU is highly recommended for training (CUDA-compatible)
