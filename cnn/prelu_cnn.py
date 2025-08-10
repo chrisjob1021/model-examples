@@ -389,6 +389,77 @@ class CNN(nn.Module):
         
         return self.classifier(x)
 
+    @classmethod
+    def from_pretrained(cls, checkpoint_path, use_prelu=None, use_builtin_conv=True, prelu_channel_wise=True, num_classes=1000, device=None):
+        """Load a trained CNN model from a checkpoint directory.
+        
+        Parameters
+        ----------
+        checkpoint_path : str
+            Path to the checkpoint directory containing 'model.safetensors'
+        use_prelu : bool, optional
+            Whether to use PReLU activation. If None, will try to infer from checkpoint path.
+        use_builtin_conv : bool, optional
+            Whether to use builtin convolutions. Defaults to True.
+        prelu_channel_wise : bool, optional
+            Whether to use channel-wise PReLU. Defaults to True.
+        num_classes : int, optional
+            Number of output classes. Defaults to 1000.
+        device : str or torch.device, optional
+            Device to load the model on. If None, will use CUDA if available.
+            
+        Returns
+        -------
+        CNN
+            Loaded CNN model with trained weights
+            
+        Examples
+        --------
+        >>> # Load from specific checkpoint
+        >>> model = CNN.from_pretrained("/path/to/checkpoint-900900")
+        >>> 
+        >>> # Load latest checkpoint from results directory
+        >>> import os
+        >>> results_dir = "/path/to/results/cnn_results_relu"
+        >>> checkpoints = [d for d in os.listdir(results_dir) if d.startswith("checkpoint-")]
+        >>> latest = max(checkpoints, key=lambda x: int(x.split("-")[1]))
+        >>> model = CNN.from_pretrained(os.path.join(results_dir, latest))
+        """
+        import os
+        from safetensors.torch import load_file
+        
+        # Set device
+        if device is None:
+            device = 'cuda' if torch.cuda.is_available() else 'cpu'
+        if isinstance(device, str):
+            device = torch.device(device)
+            
+        print(f"🔄 Loading CNN model from checkpoint...")
+        print(f"   Path: {checkpoint_path}")
+        print(f"   Activation: {'PReLU' if use_prelu else 'ReLU'}")
+        print(f"   Device: {device}")
+        
+        # Create model with specified architecture
+        model = cls(
+            use_prelu=use_prelu,
+            use_builtin_conv=use_builtin_conv, 
+            prelu_channel_wise=prelu_channel_wise,
+            num_classes=num_classes
+        )
+        
+        # Load the trained weights
+        model_path = os.path.join(checkpoint_path, "model.safetensors")
+        if not os.path.exists(model_path):
+            raise FileNotFoundError(f"model.safetensors not found in {checkpoint_path}")
+            
+        print(f"📥 Loading trained weights from: model.safetensors")
+        state_dict = load_file(model_path)
+        model.load_state_dict(state_dict)
+        
+        # Move to device
+        model = model.to(device)
+        return model
+
 from PIL import Image, ImageFile
 ImageFile.LOAD_TRUNCATED_IMAGES = True
 
