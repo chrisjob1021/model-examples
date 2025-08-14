@@ -66,6 +66,7 @@ class ModelTrainer:
                 train_dataset=self.train_dataset_raw,
                 eval_dataset=self.eval_dataset_raw,
                 data_collator=self.data_collator,
+                compute_metrics=self.compute_metrics,
                 callbacks=self.callbacks,
             )
 
@@ -90,6 +91,7 @@ class ModelTrainer:
                 train_dataset=self.train_dataset_raw,
                 eval_dataset=self.eval_dataset_raw,
                 data_collator=self.data_collator,
+                compute_metrics=self.compute_metrics,
                 callbacks=self.callbacks,
             )
 

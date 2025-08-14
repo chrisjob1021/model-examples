@@ -84,6 +84,38 @@ class SafeImageNetDataset(Dataset):
         """Delegate attribute access to the underlying dataset."""
         return getattr(self.dataset, name)
 
+def compute_metrics(eval_pred):
+    """
+    Compute top-1 and top-5 accuracy for ImageNet classification.
+    
+    Args:
+        eval_pred: EvalPrediction object containing predictions and labels
+        
+    Returns:
+        dict: Dictionary with top-1 and top-5 accuracy metrics
+    """
+    logits, labels = eval_pred
+    import numpy as np
+    
+    # Debug information to diagnose shape mismatch
+    print(f"🔍 Debug - Logits shape: {logits.shape}, Labels shape: {labels.shape}")
+    
+    # Ensure shapes match - handle potential mismatches
+    min_len = min(len(logits), len(labels))
+    if len(logits) != len(labels):
+        logits = logits[:min_len]
+        labels = labels[:min_len]
+    
+    # Calculate top-1 accuracy
+    top1 = (logits.argmax(axis=1) == labels).mean()
+
+    # Calculate top-5 accuracy (more efficient vectorized version)
+    # Get top-5 predictions for all samples at once
+    top5_preds = np.argpartition(logits, -5, axis=1)[:, -5:]
+    top5 = np.mean([labels[i] in top5_preds[i] for i in range(len(labels))])
+    
+    return {"top1": float(top1), "top5": float(top5)}
+
 def main():
     """Train ReLU CNN on ImageNet."""
     
@@ -228,7 +260,7 @@ def main():
 
     # Check for existing checkpoints to resume from
     output_dir = f"./results/cnn_results_{'prelu' if use_prelu else 'relu'}"
-    resume_from_checkpoint = find_latest_checkpoint(output_dir)
+    resume_from_checkpoint = False #find_latest_checkpoint(output_dir)
     
     if resume_from_checkpoint:
         print(f"🔄 Found checkpoint to resume from: {resume_from_checkpoint}")
@@ -260,7 +292,7 @@ def main():
         max_grad_norm=0,                # No gradient clipping (max_grad_norm=0): For CNNs, gradient clipping is usually not required,
                                         # as exploding gradients are less common compared to RNNs/transformers.
         lr_scheduler_type="cosine",     # Cosine annealing to 0 (better for SGD)
-        eval_strategy="epoch",
+        eval_strategy="steps",
         save_strategy="epoch",
         logging_strategy="steps",
         save_total_limit=3,  # Keep only 3 best checkpoints
@@ -296,6 +328,7 @@ def main():
         train_dataset=train_dataset,
         eval_dataset=eval_dataset,
         trainer_class=CNNTrainer,
+        compute_metrics=compute_metrics,
         resume_from_checkpoint=resume_from_checkpoint,
     )
     
