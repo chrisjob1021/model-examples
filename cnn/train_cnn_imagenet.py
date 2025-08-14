@@ -292,7 +292,7 @@ def main():
         max_grad_norm=0,                # No gradient clipping (max_grad_norm=0): For CNNs, gradient clipping is usually not required,
                                         # as exploding gradients are less common compared to RNNs/transformers.
         lr_scheduler_type="cosine",     # Cosine annealing to 0 (better for SGD)
-        eval_strategy="steps",
+        eval_strategy="epoch",
         save_strategy="epoch",
         logging_strategy="steps",
         save_total_limit=3,  # Keep only 3 best checkpoints
