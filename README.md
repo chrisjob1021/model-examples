@@ -19,6 +19,7 @@ This repository contains a collection of machine learning and deep learning mode
   - See [cnn/README.md](cnn/README.md) for detailed documentation
 
 ### RNN (Recurrent Neural Networks)
+=======
 - **RNNsearch** ([rnnsearch/rnnsearch.py](rnnsearch/rnnsearch.py))
   - Minimal implementation of the attention-based model from [Bahdanau et al., 2014 - arXiv:1409.0473](https://arxiv.org/pdf/1409.0473.pdf)
   - Sequence-to-sequence model with attention mechanism
