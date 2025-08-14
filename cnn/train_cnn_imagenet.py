@@ -7,7 +7,7 @@ from transformers import TrainingArguments, TrainerCallback
 import torchvision.transforms as T
 
 # Import from shared_utils package
-from shared_utils import ModelTrainer
+from shared_utils import ModelTrainer, find_latest_checkpoint
 
 from prelu_cnn import CNN, CNNTrainer
 
@@ -216,7 +216,7 @@ def main():
     num_gpus = torch.cuda.device_count()
     batch_size_per_gpu = 64
     grad_accum = 4
-    num_epochs = 360
+    num_epochs = 720
 
     # ------------------ calculate warm-up steps ------------------
     images = 1_281_167                      # ImageNet-1k train set
@@ -226,9 +226,18 @@ def main():
     total_steps = steps_per_epoch * num_epochs
     warmup_steps = int(0.1 * total_steps)  # 10 %
 
+    # Check for existing checkpoints to resume from
+    output_dir = f"./results/cnn_results_{'prelu' if use_prelu else 'relu'}"
+    resume_from_checkpoint = find_latest_checkpoint(output_dir)
+    
+    if resume_from_checkpoint:
+        print(f"🔄 Found checkpoint to resume from: {resume_from_checkpoint}")
+    else:
+        print("🆕 No existing checkpoints found, starting fresh training")
+
     # Create training arguments
     training_args = TrainingArguments(
-        output_dir=f"./results/cnn_results_{'prelu' if use_prelu else 'relu'}",
+        output_dir=output_dir,
         num_train_epochs=num_epochs,  # More epochs for better convergence
         per_device_train_batch_size=batch_size_per_gpu,  # Reduced for stability
         per_device_eval_batch_size=batch_size_per_gpu,
@@ -287,6 +296,7 @@ def main():
         train_dataset=train_dataset,
         eval_dataset=eval_dataset,
         trainer_class=CNNTrainer,
+        resume_from_checkpoint=resume_from_checkpoint,
     )
     
     # Run training

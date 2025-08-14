@@ -20,6 +20,7 @@ class ModelTrainer:
         compute_metrics=None,
         compute_loss=None,
         callbacks=None,
+        resume_from_checkpoint=None,
     ):
         """
         Initializes the ModelTrainer.
@@ -43,6 +44,7 @@ class ModelTrainer:
         self.compute_metrics = compute_metrics
         self.compute_loss = compute_loss
         self.callbacks = callbacks
+        self.resume_from_checkpoint = resume_from_checkpoint
 
         # Add timestamp to logging_dir to prevent overwriting logs
         if self.training_args.logging_dir:
@@ -68,7 +70,7 @@ class ModelTrainer:
             )
 
         print("Starting training...")
-        train_results = self.trainer.train()
+        train_results = self.trainer.train(resume_from_checkpoint=self.resume_from_checkpoint)
 
         print("Evaluating model...")
         eval_results = self.trainer.evaluate()
