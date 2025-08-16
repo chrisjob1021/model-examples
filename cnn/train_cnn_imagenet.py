@@ -286,9 +286,9 @@ def main():
     print(f"  Trainable parameters: {trainable_params:,}")
     
     num_gpus = torch.cuda.device_count()
-    batch_size_per_gpu = 64
+    batch_size_per_gpu = 128
     grad_accum = 4
-    num_epochs = 360
+    num_epochs = 80
 
     # ------------------ calculate warm-up steps ------------------
     images = 1_281_167                      # ImageNet-1k train set
