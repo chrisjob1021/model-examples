@@ -302,7 +302,7 @@ def main():
 
     # Check for existing checkpoints to resume from
     output_dir = f"./results/cnn_results_{'prelu' if use_prelu else 'relu'}"
-    resume_from_checkpoint = False #or find_latest_checkpoint(output_dir)
+    resume_from_checkpoint = False or find_latest_checkpoint(output_dir)
     
     if resume_from_checkpoint:
         print(f"🔄 Found checkpoint to resume from: {resume_from_checkpoint}")
@@ -334,7 +334,7 @@ def main():
         max_grad_norm=0,                # No gradient clipping (max_grad_norm=0): For CNNs, gradient clipping is usually not required,
                                         # as exploding gradients are less common compared to RNNs/transformers.
         lr_scheduler_type="cosine",     # Cosine annealing to 0 (better for SGD)
-        eval_strategy="epoch",
+        eval_strategy="steps",
         save_strategy="epoch",
         logging_strategy="steps",
         save_total_limit=3,  # Keep only 3 best checkpoints
