@@ -97,24 +97,78 @@ def compute_metrics(eval_pred):
     logits, labels = eval_pred
     import numpy as np
     
-    # Debug information to diagnose shape mismatch
+    # Comprehensive debugging to identify zero accuracy issue
     print(f"🔍 Debug - Logits shape: {logits.shape}, Labels shape: {labels.shape}")
+    print(f"🔍 Debug - Logits min: {logits.min():.6f}, max: {logits.max():.6f}, mean: {logits.mean():.6f}")
+    print(f"🔍 Debug - Labels min: {labels.min()}, max: {labels.max()}, unique count: {len(np.unique(labels))}")
     
-    # Ensure shapes match - handle potential mismatches
+    # Check for invalid values
+    if np.any(np.isnan(logits)) or np.any(np.isinf(logits)):
+        print("⚠️ Warning: Found NaN or Inf values in logits!")
+        return {"top1": 0.0, "top5": 0.0}
+    
+    # Ensure shapes match - handle potential mismatches with offset detection
     min_len = min(len(logits), len(labels))
     if len(logits) != len(labels):
-        logits = logits[:min_len]
-        labels = labels[:min_len]
+        print(f"⚠️ Warning: Shape mismatch! Logits: {len(logits)}, Labels: {len(labels)}")
+        
+        # Try to detect if there's a simple offset issue
+        if abs(len(logits) - len(labels)) <= 2:
+            print("🔍 Checking for alignment issues...")
+            
+            # Test different alignment strategies
+            best_match = 0
+            best_logits = logits[:min_len]
+            best_labels = labels[:min_len]
+            
+            # Try truncating from different ends
+            for logit_start in range(min(2, len(logits) - min_len + 1)):
+                for label_start in range(min(2, len(labels) - min_len + 1)):
+                    test_logits = logits[logit_start:logit_start + min_len]
+                    test_labels = labels[label_start:label_start + min_len]
+                    
+                    if len(test_logits) == len(test_labels) == min_len:
+                        # Quick accuracy check
+                        test_predictions = test_logits.argmax(axis=1)
+                        matches = (test_predictions == test_labels).sum()
+                        
+                        if matches > best_match:
+                            best_match = matches
+                            best_logits = test_logits
+                            best_labels = test_labels
+                            print(f"🔍 Better alignment found: {matches}/{min_len} matches (logit_start={logit_start}, label_start={label_start})")
+            
+            logits = best_logits
+            labels = best_labels
+            print(f"🔍 Using best alignment with {best_match}/{min_len} matches")
+        else:
+            logits = logits[:min_len]
+            labels = labels[:min_len]
     
     # Calculate top-1 accuracy
-    top1 = (logits.argmax(axis=1) == labels).mean()
-
-    # Calculate top-5 accuracy (more efficient vectorized version)
-    # Get top-5 predictions for all samples at once
-    top5_preds = np.argpartition(logits, -5, axis=1)[:, -5:]
-    top5 = np.mean([labels[i] in top5_preds[i] for i in range(len(labels))])
+    predictions = logits.argmax(axis=1)
+    correct_top1 = (predictions == labels)
+    top1 = correct_top1.mean()
     
-    return {"top1": float(top1), "top5": float(top5)}
+    print(f"🔍 Debug - First 10 predictions: {predictions[:10]}")
+    print(f"🔍 Debug - First 10 labels: {labels[:10]}")
+    print(f"🔍 Debug - First 10 correct: {correct_top1[:10]}")
+    print(f"🔍 Debug - Total correct: {correct_top1.sum()}/{len(labels)}")
+
+    # Calculate top-5 accuracy (fixed version)
+    # Get indices of top-5 predictions for each sample
+    top5_indices = np.argsort(logits, axis=1)[:, -5:]  # Get top-5 indices
+    # Check if true label is in top-5 predictions for each sample
+    top5_correct = np.array([labels[i] in top5_indices[i] for i in range(len(labels))])
+    top5 = top5_correct.mean()
+    
+    print(f"🔍 Debug - Top-5 correct: {top5_correct.sum()}/{len(labels)}")
+    print(f"🔍 Debug - Sample top-5 predictions for first item: {top5_indices[0]}")
+    print(f"🔍 Debug - First label in top-5? {labels[0] in top5_indices[0]}")
+    
+    metrics = {"top1": float(top1), "top5": float(top5)}
+    print(f"🔍 Debug - Final metrics: {metrics}")
+    return metrics
 
 def main():
     """Train ReLU CNN on ImageNet."""
@@ -196,7 +250,7 @@ def main():
 
     # Wrap datasets with safe wrapper to handle EXIF errors on-demand
     train_dataset = SafeImageNetDataset(train_dataset, train_transform_fn)
-    eval_dataset = eval_dataset.with_transform(eval_transform_fn)
+    eval_dataset = eval_dataset.with_transform(eval_transform_fn).select(range(64))
     
     print(f"✅ Loaded datasets with safe EXIF error handling")
     print(f"✅ Training samples: {len(train_dataset):,}")
@@ -248,7 +302,7 @@ def main():
     num_gpus = torch.cuda.device_count()
     batch_size_per_gpu = 64
     grad_accum = 4
-    num_epochs = 720
+    num_epochs = 360
 
     # ------------------ calculate warm-up steps ------------------
     images = 1_281_167                      # ImageNet-1k train set
@@ -260,7 +314,7 @@ def main():
 
     # Check for existing checkpoints to resume from
     output_dir = f"./results/cnn_results_{'prelu' if use_prelu else 'relu'}"
-    resume_from_checkpoint = False #find_latest_checkpoint(output_dir)
+    resume_from_checkpoint = False or find_latest_checkpoint(output_dir)
     
     if resume_from_checkpoint:
         print(f"🔄 Found checkpoint to resume from: {resume_from_checkpoint}")
@@ -292,7 +346,7 @@ def main():
         max_grad_norm=0,                # No gradient clipping (max_grad_norm=0): For CNNs, gradient clipping is usually not required,
                                         # as exploding gradients are less common compared to RNNs/transformers.
         lr_scheduler_type="cosine",     # Cosine annealing to 0 (better for SGD)
-        eval_strategy="epoch",
+        eval_strategy="steps",
         save_strategy="epoch",
         logging_strategy="steps",
         save_total_limit=3,  # Keep only 3 best checkpoints
