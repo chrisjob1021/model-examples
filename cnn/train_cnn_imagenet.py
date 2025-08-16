@@ -96,51 +96,47 @@ def compute_metrics(eval_pred):
     """
     logits, labels = eval_pred
     import numpy as np
-    
-    # Comprehensive debugging to identify zero accuracy issue
-    print(f"🔍 Debug - Logits shape: {logits.shape}, Labels shape: {labels.shape}")
-    print(f"🔍 Debug - Logits min: {logits.min():.6f}, max: {logits.max():.6f}, mean: {logits.mean():.6f}")
-    print(f"🔍 Debug - Labels min: {labels.min()}, max: {labels.max()}, unique count: {len(np.unique(labels))}")
-    
+
     # Check for invalid values
     if np.any(np.isnan(logits)) or np.any(np.isinf(logits)):
         print("⚠️ Warning: Found NaN or Inf values in logits!")
         return {"top1": 0.0, "top5": 0.0}
     
     # Ensure shapes match - handle potential mismatches with offset detection
+    # Handle bug/compatability issue between our custom SafeDataLoader & HuggingFace Trainer 
     min_len = min(len(logits), len(labels))
     if len(logits) != len(labels):
         print(f"⚠️ Warning: Shape mismatch! Logits: {len(logits)}, Labels: {len(labels)}")
         
-        # Try to detect if there's a simple offset issue
-        if abs(len(logits) - len(labels)) <= 2:
-            print("🔍 Checking for alignment issues...")
+        # Try to detect if there's a simple offset issue - check if the length difference is small (<=2)
+        if abs(len(logits) - len(labels)) <= 2:            
+            # Initialize variables to track the best alignment strategy
+            best_match = 0  # Track the highest number of correct predictions found
+            best_logits = logits[:min_len]  # Default to truncating logits from the start
+            best_labels = labels[:min_len]  # Default to truncating labels from the start
             
-            # Test different alignment strategies
-            best_match = 0
-            best_logits = logits[:min_len]
-            best_labels = labels[:min_len]
-            
-            # Try truncating from different ends
+            # Try truncating from different starting positions to find best alignment
+            # Test up to 2 different starting positions for logits
             for logit_start in range(min(2, len(logits) - min_len + 1)):
+                # Test up to 2 different starting positions for labels
                 for label_start in range(min(2, len(labels) - min_len + 1)):
+                    # Extract aligned segments of the specified minimum length
                     test_logits = logits[logit_start:logit_start + min_len]
                     test_labels = labels[label_start:label_start + min_len]
                     
+                    # Verify that both segments have the correct length
                     if len(test_logits) == len(test_labels) == min_len:
-                        # Quick accuracy check
-                        test_predictions = test_logits.argmax(axis=1)
-                        matches = (test_predictions == test_labels).sum()
+                        # Perform a quick accuracy check to evaluate this alignment
+                        test_predictions = test_logits.argmax(axis=1)  # Get predicted class indices
+                        matches = (test_predictions == test_labels).sum()  # Count correct predictions
                         
+                        # If this alignment performs better, save it as the best option
                         if matches > best_match:
-                            best_match = matches
-                            best_logits = test_logits
-                            best_labels = test_labels
-                            print(f"🔍 Better alignment found: {matches}/{min_len} matches (logit_start={logit_start}, label_start={label_start})")
-            
+                            best_match = matches  # Update the best match count
+                            best_logits = test_logits  # Save the best logits alignment
+                            best_labels = test_labels  # Save the best labels alignment
             logits = best_logits
             labels = best_labels
-            print(f"🔍 Using best alignment with {best_match}/{min_len} matches")
         else:
             logits = logits[:min_len]
             labels = labels[:min_len]
@@ -149,11 +145,6 @@ def compute_metrics(eval_pred):
     predictions = logits.argmax(axis=1)
     correct_top1 = (predictions == labels)
     top1 = correct_top1.mean()
-    
-    print(f"🔍 Debug - First 10 predictions: {predictions[:10]}")
-    print(f"🔍 Debug - First 10 labels: {labels[:10]}")
-    print(f"🔍 Debug - First 10 correct: {correct_top1[:10]}")
-    print(f"🔍 Debug - Total correct: {correct_top1.sum()}/{len(labels)}")
 
     # Calculate top-5 accuracy (fixed version)
     # Get indices of top-5 predictions for each sample
@@ -162,12 +153,7 @@ def compute_metrics(eval_pred):
     top5_correct = np.array([labels[i] in top5_indices[i] for i in range(len(labels))])
     top5 = top5_correct.mean()
     
-    print(f"🔍 Debug - Top-5 correct: {top5_correct.sum()}/{len(labels)}")
-    print(f"🔍 Debug - Sample top-5 predictions for first item: {top5_indices[0]}")
-    print(f"🔍 Debug - First label in top-5? {labels[0] in top5_indices[0]}")
-    
     metrics = {"top1": float(top1), "top5": float(top5)}
-    print(f"🔍 Debug - Final metrics: {metrics}")
     return metrics
 
 def main():
@@ -314,7 +300,7 @@ def main():
 
     # Check for existing checkpoints to resume from
     output_dir = f"./results/cnn_results_{'prelu' if use_prelu else 'relu'}"
-    resume_from_checkpoint = False or find_latest_checkpoint(output_dir)
+    resume_from_checkpoint = False #or find_latest_checkpoint(output_dir)
     
     if resume_from_checkpoint:
         print(f"🔄 Found checkpoint to resume from: {resume_from_checkpoint}")
@@ -346,7 +332,7 @@ def main():
         max_grad_norm=0,                # No gradient clipping (max_grad_norm=0): For CNNs, gradient clipping is usually not required,
                                         # as exploding gradients are less common compared to RNNs/transformers.
         lr_scheduler_type="cosine",     # Cosine annealing to 0 (better for SGD)
-        eval_strategy="steps",
+        eval_strategy="epoch",
         save_strategy="epoch",
         logging_strategy="steps",
         save_total_limit=3,  # Keep only 3 best checkpoints
