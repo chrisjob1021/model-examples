@@ -21,6 +21,7 @@ class ModelTrainer:
         compute_loss=None,
         callbacks=None,
         resume_from_checkpoint=None,
+        disable_timestamped_logging=False,
     ):
         """
         Initializes the ModelTrainer.
@@ -33,6 +34,11 @@ class ModelTrainer:
             preprocess_fn (callable, optional): A function to preprocess the datasets. Defaults to None.
             data_collator (callable, optional): The data collator. Defaults to None.
             trainer_class (Trainer, optional): A custom Trainer class to use. Defaults to `transformers.Trainer`.
+            compute_metrics (callable, optional): Function to compute metrics during evaluation. Defaults to None.
+            compute_loss (callable, optional): Custom loss function. Defaults to None.
+            callbacks (list, optional): List of callbacks for the trainer. Defaults to None.
+            resume_from_checkpoint (str, optional): Path to checkpoint to resume from. Defaults to None.
+            disable_timestamped_logging (bool, optional): If True, disables automatic timestamped logging directories. Defaults to False.
         """
         self.model = model
         self.training_args = training_args
@@ -45,9 +51,10 @@ class ModelTrainer:
         self.compute_loss = compute_loss
         self.callbacks = callbacks
         self.resume_from_checkpoint = resume_from_checkpoint
+        self.disable_timestamped_logging = disable_timestamped_logging
 
-        # Add timestamp to logging_dir to prevent overwriting logs
-        if self.training_args.logging_dir:
+        # Add timestamp to logging_dir to prevent overwriting logs (unless disabled)
+        if self.training_args.logging_dir and not disable_timestamped_logging:
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             self.training_args.logging_dir = (
                 f"{self.training_args.logging_dir}_{timestamp}"

@@ -172,6 +172,9 @@ def main():
     
     use_prelu = True
     
+    # Debugging options
+    disable_logging = True  # Set to True to disable timestamped logging folders during debugging
+    
     # Create CNN model
     activation_type = "PReLU" if use_prelu else "ReLU"
     print(f"\n🏗️ Creating {activation_type} CNN model ({1000} classes)...")
@@ -228,6 +231,9 @@ def main():
     total_steps = steps_per_epoch * num_epochs
     warmup_steps = int(0.1 * total_steps)  # 10 %
 
+    learning_rate = 0.1
+    
+
     # Check for existing checkpoints to resume from
     output_dir = f"./results/cnn_results_{'prelu' if use_prelu else 'relu'}"
     resume_from_checkpoint = False or find_latest_checkpoint(output_dir)
@@ -243,7 +249,7 @@ def main():
         num_train_epochs=num_epochs,  # More epochs for better convergence
         per_device_train_batch_size=batch_size_per_gpu,  # Reduced for stability
         per_device_eval_batch_size=batch_size_per_gpu,
-        learning_rate=0.1,
+        learning_rate=learning_rate,
         weight_decay=1e-4,
         warmup_steps=warmup_steps,
         gradient_accumulation_steps=grad_accum,
@@ -251,7 +257,7 @@ def main():
         logging_steps=100,
         save_steps=1,
         seed=42,
-        logging_dir="./logs/logs",
+        logging_dir="./logs/logs" if not disable_logging else None,
         remove_unused_columns=False, # Fix for custom dataset format
         dataloader_num_workers=8, # Parallel data loading
         dataloader_persistent_workers=False,
@@ -261,7 +267,11 @@ def main():
         optim_args="momentum=0.9",
         max_grad_norm=0,                # No gradient clipping (max_grad_norm=0): For CNNs, gradient clipping is usually not required,
                                         # as exploding gradients are less common compared to RNNs/transformers.
-        lr_scheduler_type="cosine",     # Cosine annealing to 0 (better for SGD)
+        lr_scheduler_type="cosine_with_min_lr",  # Cosine with built-in learning rate floor
+        lr_scheduler_kwargs={
+            "num_cycles": 0.25,  # Complete only 1/4 of cosine cycle = stretched period (4x longer)
+            "min_lr_rate": 0.01 * learning_rate,  # Learning rate floor as 1% of initial LR
+        },
         eval_strategy="steps",
         save_strategy="epoch",
         logging_strategy="steps",
@@ -271,7 +281,7 @@ def main():
         greater_is_better=False,
         prediction_loss_only=False,
         label_names=["labels"], # need this to get eval_loss
-        report_to="tensorboard",
+        report_to="tensorboard" if not disable_logging else "none",
     )
 
     
@@ -288,6 +298,9 @@ def main():
     print(f"  Output directory: {training_args.output_dir}")
     print(f"  Remove unused columns: {training_args.remove_unused_columns}")
     print(f"  Dataloader workers: {training_args.dataloader_num_workers}")
+    print(f"  Logging disabled: {disable_logging}")
+    print(f"  Logging directory: {training_args.logging_dir}")
+    print(f"  Report to: {training_args.report_to}")
     
     # Create trainer using ModelTrainer
     print(f"\n🏋️ Setting up trainer...")
