@@ -244,8 +244,10 @@ def main():
     
     use_prelu = True
     
-    # Create ReLU CNN model
-    print(f"\n🏗️ Creating ReLU CNN model ({1000} classes)...")
+    # Create CNN model
+    activation_type = "PReLU" if use_prelu else "ReLU"
+    print(f"\n🏗️ Creating {activation_type} CNN model ({1000} classes)...")
+    print(f"🔧 Activation function: {activation_type}")
     model = CNN(
         use_prelu=use_prelu,
         use_builtin_conv=True,  # Use fast PyTorch convolutions
