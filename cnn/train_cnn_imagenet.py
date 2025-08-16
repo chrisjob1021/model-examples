@@ -84,78 +84,6 @@ class SafeImageNetDataset(Dataset):
         """Delegate attribute access to the underlying dataset."""
         return getattr(self.dataset, name)
 
-def compute_metrics(eval_pred):
-    """
-    Compute top-1 and top-5 accuracy for ImageNet classification.
-    
-    Args:
-        eval_pred: EvalPrediction object containing predictions and labels
-        
-    Returns:
-        dict: Dictionary with top-1 and top-5 accuracy metrics
-    """
-    logits, labels = eval_pred
-    import numpy as np
-
-    # Check for invalid values
-    if np.any(np.isnan(logits)) or np.any(np.isinf(logits)):
-        print("⚠️ Warning: Found NaN or Inf values in logits!")
-        return {"top1": 0.0, "top5": 0.0}
-    
-    # Ensure shapes match - handle potential mismatches with offset detection
-    # Handle bug/compatability issue between our custom SafeDataLoader & HuggingFace Trainer 
-    min_len = min(len(logits), len(labels))
-    if len(logits) != len(labels):
-        print(f"⚠️ Warning: Shape mismatch! Logits: {len(logits)}, Labels: {len(labels)}")
-        
-        # Try to detect if there's a simple offset issue - check if the length difference is small (<=2)
-        if abs(len(logits) - len(labels)) <= 2:            
-            # Initialize variables to track the best alignment strategy
-            best_match = 0  # Track the highest number of correct predictions found
-            best_logits = logits[:min_len]  # Default to truncating logits from the start
-            best_labels = labels[:min_len]  # Default to truncating labels from the start
-            
-            # Try truncating from different starting positions to find best alignment
-            # Test up to 2 different starting positions for logits
-            for logit_start in range(min(2, len(logits) - min_len + 1)):
-                # Test up to 2 different starting positions for labels
-                for label_start in range(min(2, len(labels) - min_len + 1)):
-                    # Extract aligned segments of the specified minimum length
-                    test_logits = logits[logit_start:logit_start + min_len]
-                    test_labels = labels[label_start:label_start + min_len]
-                    
-                    # Verify that both segments have the correct length
-                    if len(test_logits) == len(test_labels) == min_len:
-                        # Perform a quick accuracy check to evaluate this alignment
-                        test_predictions = test_logits.argmax(axis=1)  # Get predicted class indices
-                        matches = (test_predictions == test_labels).sum()  # Count correct predictions
-                        
-                        # If this alignment performs better, save it as the best option
-                        if matches > best_match:
-                            best_match = matches  # Update the best match count
-                            best_logits = test_logits  # Save the best logits alignment
-                            best_labels = test_labels  # Save the best labels alignment
-            logits = best_logits
-            labels = best_labels
-        else:
-            logits = logits[:min_len]
-            labels = labels[:min_len]
-    
-    # Calculate top-1 accuracy
-    predictions = logits.argmax(axis=1)
-    correct_top1 = (predictions == labels)
-    top1 = correct_top1.mean()
-
-    # Calculate top-5 accuracy (fixed version)
-    # Get indices of top-5 predictions for each sample
-    top5_indices = np.argsort(logits, axis=1)[:, -5:]  # Get top-5 indices
-    # Check if true label is in top-5 predictions for each sample
-    top5_correct = np.array([labels[i] in top5_indices[i] for i in range(len(labels))])
-    top5 = top5_correct.mean()
-    
-    metrics = {"top1": float(top1), "top5": float(top5)}
-    return metrics
-
 def main():
     """Train ReLU CNN on ImageNet."""
     
@@ -370,7 +298,6 @@ def main():
         train_dataset=train_dataset,
         eval_dataset=eval_dataset,
         trainer_class=CNNTrainer,
-        compute_metrics=compute_metrics,
         resume_from_checkpoint=resume_from_checkpoint,
     )
     
