@@ -173,7 +173,7 @@ def main():
     use_prelu = True
     
     # Debugging options
-    disable_logging = True  # Set to True to disable timestamped logging folders during debugging
+    disable_logging = False  # Set to True to disable timestamped logging folders during debugging
     
     # Create CNN model
     activation_type = "PReLU" if use_prelu else "ReLU"
@@ -236,7 +236,7 @@ def main():
 
     # Check for existing checkpoints to resume from
     output_dir = f"./results/cnn_results_{'prelu' if use_prelu else 'relu'}"
-    resume_from_checkpoint = False or find_latest_checkpoint(output_dir)
+    resume_from_checkpoint = False #or find_latest_checkpoint(output_dir)
     
     if resume_from_checkpoint:
         print(f"🔄 Found checkpoint to resume from: {resume_from_checkpoint}")
@@ -272,7 +272,7 @@ def main():
             "num_cycles": 0.25,  # Complete only 1/4 of cosine cycle = stretched period (4x longer)
             "min_lr_rate": 0.01 * learning_rate,  # Learning rate floor as 1% of initial LR
         },
-        eval_strategy="steps",
+        eval_strategy="epoch",
         save_strategy="epoch",
         logging_strategy="steps",
         save_total_limit=3,  # Keep only 3 best checkpoints
