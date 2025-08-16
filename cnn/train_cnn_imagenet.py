@@ -236,7 +236,7 @@ def main():
 
     # Wrap datasets with safe wrapper to handle EXIF errors on-demand
     train_dataset = SafeImageNetDataset(train_dataset, train_transform_fn)
-    eval_dataset = eval_dataset.with_transform(eval_transform_fn).select(range(64))
+    eval_dataset = eval_dataset.with_transform(eval_transform_fn)
     
     print(f"✅ Loaded datasets with safe EXIF error handling")
     print(f"✅ Training samples: {len(train_dataset):,}")
