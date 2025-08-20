@@ -221,7 +221,7 @@ def main():
     num_gpus = torch.cuda.device_count()
     batch_size_per_gpu = 128
     grad_accum = 4
-    num_epochs = 80
+    num_epochs = 200
 
     # ------------------ calculate warm-up steps ------------------
     images = 1_281_167                      # ImageNet-1k train set
@@ -229,10 +229,7 @@ def main():
     steps_per_epoch = (images + eff_batch - 1) // eff_batch # forces rounding up to nearest integer
     #                                                       # The formula (a + b - 1) // b is equivalent to ceil(a / b)
     total_steps = steps_per_epoch * num_epochs
-    warmup_steps = int(0.1 * total_steps)  # 10 %
-
-    learning_rate = 0.1
-    
+    warmup_steps = int(0.1 * total_steps)  # 10 %    
 
     # Check for existing checkpoints to resume from
     output_dir = f"./results/cnn_results_{'prelu' if use_prelu else 'relu'}"
@@ -249,7 +246,7 @@ def main():
         num_train_epochs=num_epochs,  # More epochs for better convergence
         per_device_train_batch_size=batch_size_per_gpu,  # Reduced for stability
         per_device_eval_batch_size=batch_size_per_gpu,
-        learning_rate=learning_rate,
+        learning_rate=0.1,
         weight_decay=1e-4,
         warmup_steps=warmup_steps,
         gradient_accumulation_steps=grad_accum,
@@ -270,7 +267,7 @@ def main():
         lr_scheduler_type="cosine_with_min_lr",  # Cosine with built-in learning rate floor
         lr_scheduler_kwargs={
             "num_cycles": 0.25,  # Complete only 1/4 of cosine cycle = stretched period (4x longer)
-            "min_lr_rate": 0.01 * learning_rate,  # Learning rate floor as 1% of initial LR
+            "min_lr_rate": 0.01,  # Learning rate floor as 1% ratio of initial LR
         },
         eval_strategy="epoch",
         save_strategy="epoch",
