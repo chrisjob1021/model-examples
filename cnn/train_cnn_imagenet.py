@@ -120,7 +120,7 @@ def main():
         T.RandAugment(num_ops=2, magnitude=9),            # Apply 2 random augmentations with magnitude 9 (extra augmentation)
         T.ToTensor(),                                     # Convert PIL Image or numpy.ndarray to tensor and scale to [0, 1]
         T.Normalize(mean, std),                           # Normalize using ImageNet mean and std
-        T.RandomErasing(p=0.25, scale=(0.02, 0.1)),       # Randomly erase a rectangle region (extra augmentation, 25% chance)
+        T.RandomErasing(p=0.1, scale=(0.02, 0.1)),       # Randomly erase a rectangle region (extra augmentation, 25% chance)
     ])
 
     # Define the preprocessing pipeline for evaluation images (no heavy augmentation)
@@ -219,9 +219,9 @@ def main():
     print(f"  Trainable parameters: {trainable_params:,}")
     
     num_gpus = torch.cuda.device_count()
-    batch_size_per_gpu = 128
+    batch_size_per_gpu = 256
     grad_accum = 4
-    num_epochs = 200
+    num_epochs = 100
 
     # ------------------ calculate warm-up steps ------------------
     images = 1_281_167                      # ImageNet-1k train set
@@ -229,7 +229,7 @@ def main():
     steps_per_epoch = (images + eff_batch - 1) // eff_batch # forces rounding up to nearest integer
     #                                                       # The formula (a + b - 1) // b is equivalent to ceil(a / b)
     total_steps = steps_per_epoch * num_epochs
-    warmup_steps = int(0.1 * total_steps)  # 10 %    
+    warmup_steps = int(0.05 * total_steps) 
 
     # Check for existing checkpoints to resume from
     output_dir = f"./results/cnn_results_{'prelu' if use_prelu else 'relu'}"
@@ -246,7 +246,7 @@ def main():
         num_train_epochs=num_epochs,  # More epochs for better convergence
         per_device_train_batch_size=batch_size_per_gpu,  # Reduced for stability
         per_device_eval_batch_size=batch_size_per_gpu,
-        learning_rate=0.1,
+        learning_rate=0.01,
         weight_decay=1e-4,
         warmup_steps=warmup_steps,
         gradient_accumulation_steps=grad_accum,
@@ -261,13 +261,13 @@ def main():
         dataloader_pin_memory=True,     # If True, the DataLoader will copy Tensors into CUDA pinned memory before returning them.
                                         # This can speed up host-to-GPU transfer, especially for large batches.
         optim="sgd",
-        optim_args="momentum=0.9",
+        optim_args="momentum=0.9,nesterov=True",
         max_grad_norm=0,                # No gradient clipping (max_grad_norm=0): For CNNs, gradient clipping is usually not required,
                                         # as exploding gradients are less common compared to RNNs/transformers.
         lr_scheduler_type="cosine_with_min_lr",  # Cosine with built-in learning rate floor
         lr_scheduler_kwargs={
             "num_cycles": 0.50, # default value, cosine curve ends at 0
-            "min_lr_rate": 0.01,  # Learning rate floor as 1% ratio of initial LR
+            "min_lr_rate": 0.10,  # Learning rate floor as 10% ratio of initial LR
         },
         eval_strategy="epoch",
         save_strategy="epoch",
