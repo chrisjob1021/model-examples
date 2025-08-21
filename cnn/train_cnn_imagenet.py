@@ -267,7 +267,7 @@ def main():
         lr_scheduler_type="cosine_with_min_lr",  # Cosine with built-in learning rate floor
         lr_scheduler_kwargs={
             "num_cycles": 0.50, # default value, cosine curve ends at 0
-            "min_lr_rate": 0.10,  # Learning rate floor as 10% ratio of initial LR
+            "min_lr_rate": 0.01,  # Learning rate floor as 1% ratio of initial LR
         },
         eval_strategy="epoch",
         save_strategy="epoch",
