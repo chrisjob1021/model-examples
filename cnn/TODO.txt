@@ -1,5 +1,5 @@
 
-  Modern Recommendations:
+  Training Recommendations:
 
   1. Learning Rate Schedule
 
@@ -20,23 +20,19 @@
   4. Warmup
 
   - Reduce to 3-5% of total steps (not 10%)
-  - Linear warmup is fine
 
   5. Label Smoothing
 
-  - Add label_smoothing_factor=0.1 in TrainingArguments
-  - Helps generalization significantly
+  - Add label_smoothing_factor=0.1 in TrainingArguments (currently hardcoded)
 
   6. Mixed Precision
 
   - Add fp16=True or bf16=True for faster training
-  - Allows larger batch sizes
 
   7. Data Augmentation
 
-  - Your RandAugment is good but consider:
-    - Reduce RandomErasing to p=0.1 (25% is aggressive)
-    - Add MixUp or CutMix for better regularization
+  - Reduce RandomErasing to p=0.1 (25% is aggressive)
+  - Add MixUp or CutMix for better regularization
 
   8. Learning Rate Scaling
 
