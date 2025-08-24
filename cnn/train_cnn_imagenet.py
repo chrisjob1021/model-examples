@@ -248,7 +248,7 @@ def main():
         per_device_eval_batch_size=batch_size_per_gpu,
         learning_rate=0.1,
         weight_decay=1e-4,
-        warmup_steps=warmup_steps,
+        warmup_steps=warmup_steps, # TODO: get rid of the internal implementation for warmup_steps and use Trainer's
         gradient_accumulation_steps=grad_accum,
         eval_steps=1,
         logging_steps=100,
