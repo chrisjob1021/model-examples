@@ -283,6 +283,15 @@ def main():
         # b = mu * b + g(theta)               # momentum buffer (EMA of grads)
         # g_eff = g(theta) + mu * b           # effective Nesterov gradient
         # theta -= lr * g_eff                 # single update
+
+        # --- Momentum buffer as an EMA of gradients -----------------------------------
+        # Recurrence (PyTorch SGD with dampening=0):
+        #   b_t = μ * b_{t-1} + g_t                    # g_t := ∇f(θ_t)
+        #
+        # Unrolled (shows the EMA weights explicitly):
+        #   b_t = g_t + μ g_{t-1} + μ^2 g_{t-2} + ... + μ^t g_0
+        #        = ∑_{k=0}^{t} μ^k * g_{t-k}
+        #   # Geometric weights favor recent grads; effective memory ≈ 1/(1-μ) steps.
         #
         # Notes:
         # - Requires: momentum > 0 and dampening == 0 for true Nesterov behavior.
