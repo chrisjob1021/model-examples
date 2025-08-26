@@ -37,3 +37,5 @@
   8. Learning Rate Scaling
 
   - With larger batch size, scale LR: lr = 0.01 * (batch_size / 256)
+
+  If you run strong aug (RandAugment, Mixup α≈0.2–0.4, CutMix β≈1.0), long cosine (hundreds of epochs), momentum 0.9–0.95, WD 1e-4–5e-4, and EMA (0.999–0.9999), you’ve effectively smoothed and preconditioned the landscape. SGD’s implicit bias toward flat, large-margin solutions dominates, so it often beats Adam/AdamW on final accuracy—even if Adam is faster early on.
