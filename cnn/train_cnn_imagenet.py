@@ -218,10 +218,41 @@ def main():
     print(f"  Total parameters: {total_params:,}")
     print(f"  Trainable parameters: {trainable_params:,}")
     
-    num_gpus = torch.cuda.device_count()
     batch_size_per_gpu = 256
     grad_accum = 4
     num_epochs = 300 
+
+    # For ImageNet training, I'd recommend sticking with batch_size=256 rather than 128. Here's why:
+
+    #   1. Better gradient estimates: Larger batches provide more stable gradients
+    #   2. Linear scaling rule: With batch=1024 and lr=0.1, you're at the sweet spot 
+    #   3. Standard practice: Most successful ImageNet trainings use effective batch sizes of 256-2048
+
+    #   If we switch to 128 for example:
+    #   - Effective batch = 512 → more noisy gradients
+    #   - Would need to reduce lr to ~0.05 for stability
+    #   - Training would take longer (2x more gradient steps)
+    #   - No accuracy benefit over batch=1024
+
+    #   The linear scaling rule states that when you increase batch size,
+    #   you can proportionally increase learning rate to maintain similar training dynamics.
+
+    #   The formula: lr = base_lr × (batch_size / base_batch)
+    #   Standard ImageNet baseline:
+    #   - Base batch: 256
+    #   - Base lr: 0.1
+
+    #   Our setup:
+    #   - Batch: 1024 (256×4 grad accum)
+    #   - Expected lr: 0.1 × (1024/256) = 0.4
+
+    #   But we're using lr=0.1, which is conservative and safer. Here's why this works:
+    #   1. Linear scaling breaks down around batch 2k-8k depending on the model/dataset
+    #   2. Beyond batch ~2k, you need additional tricks (warmup, LARS/LAMB optimizers) to maintain stability
+    #   3. Our lr=0.1 with batch=1024 is actually the "sweet spot" because:
+    #     - It's aggressive enough for fast convergence
+    #     - Conservative enough to avoid instability
+    #     - Matches many successful ImageNet papers' settings
 
     # Check for existing checkpoints to resume from
     output_dir = f"./results/cnn_results_{'prelu' if use_prelu else 'relu'}"
@@ -240,7 +271,19 @@ def main():
         per_device_eval_batch_size=batch_size_per_gpu,
         learning_rate=0.1,
         weight_decay=1e-4,
-        warmup_ratio=0.03,  # Use 3% of total training steps for warmup
+        # A reasonable weight_decay value typically ranges from 1e-4 to 1e-2
+        #   Why these values work:
+        #   - Too low (<1e-5): Minimal regularization effect, model may overfit
+        #   - Too high (>1e-1): Over-regularization, model underfits and struggles to learn
+        #   - Sweet spot (1e-4 to 1e-2): Balances learning capacity with generalization
+        #   Weight decay (L2 regularization) penalizes large weights by adding λ||w||² to the loss, 
+        #   encouraging the model to use smaller, more distributed weights rather than relying on a few large parameters. 
+
+        # For vision models like CNNs, 1e-4 is often a good default. 
+        # For transformers, values around 1e-2 are sometimes used, especially with AdamW optimizer 
+        # which decouples weight decay from gradient-based updates.
+        warmup_ratio=0.05,  # Use 5% of total training steps for warmup
+                            # Tried 3%, it was lagging behind the 5% setting
         gradient_accumulation_steps=grad_accum,
         eval_steps=1,
         logging_steps=100,
@@ -253,7 +296,7 @@ def main():
         dataloader_pin_memory=True,     # If True, the DataLoader will copy Tensors into CUDA pinned memory before returning them.
                                         # This can speed up host-to-GPU transfer, especially for large batches.
         optim="sgd",
-        optim_args="momentum=0.95,nesterov=True,dampening=0",
+        optim_args="momentum=0.90,nesterov=True,dampening=0", # Tried 0.95, was trailing behind 0.90
         # === Momentum SGD variants (one parameter update per step) ====================
         # Notation:
         #   theta: params
@@ -297,12 +340,26 @@ def main():
         # - Requires: momentum > 0 and dampening == 0 for true Nesterov behavior.
         # - torch.optim.SGD uses coupled L2 as weight_decay (adds λ*theta to g).
 
-        max_grad_norm=0,                # No gradient clipping (max_grad_norm=0): For CNNs, gradient clipping is usually not required,
-                                        # as exploding gradients are less common compared to RNNs/transformers.
+        # --- Momentum (Polyak heavy-ball) and the geometric-series factors ---
+        # Update:
+        #   v_{t+1} = μ v_t − η ∇f(θ_t)
+        #   θ_{t+1} = θ_t + v_{t+1}
+        #
+        # Think of v as "velocity." Carrying over a fraction μ of last step adds inertia:
+        #   • boosts directions where gradients keep the same sign (low-frequency signal),
+        #   • damps zig-zagging across steep ravines (high-frequency sign flips).
+        #
+        # Unrolled (geometric series on past grads):
+        #   v_t = -η ∑_{k=0}^t μ^k g_{t-k}
+        #   • Past gradients are weighted by μ^k (recent ones count more).
+
+        max_grad_norm=100,                # For CNNs, gradient clipping is usually not required,
+                                          # as exploding gradients are less common compared to RNNs/transformers.
+                                          # Setting a value solely to get the grad_norm reported in Tensorboard
         lr_scheduler_type="cosine_with_min_lr",  # Cosine with built-in learning rate floor
         lr_scheduler_kwargs={
             "num_cycles": 0.50, # default value, cosine curve ends at 0
-            "min_lr_rate": 0.15,  # Learning rate floor as 10% ratio of initial LR
+            "min_lr_rate": 0.15,  # Learning rate floor as 15% ratio of initial LR
         },
         eval_strategy="epoch",
         save_strategy="epoch",
