@@ -345,13 +345,15 @@ def main():
         #   v_{t+1} = μ v_t − η ∇f(θ_t)
         #   θ_{t+1} = θ_t + v_{t+1}
         #
-        # Think of v as "velocity." Carrying over a fraction μ of last step adds inertia:
-        #   • boosts directions where gradients keep the same sign (low-frequency signal),
-        #   • damps zig-zagging across steep ravines (high-frequency sign flips).
-        #
         # Unrolled (geometric series on past grads):
         #   v_t = -η ∑_{k=0}^t μ^k g_{t-k}
         #   • Past gradients are weighted by μ^k (recent ones count more).
+
+        # First-order decrease: f(θ + Δ) ≈ f(θ) + ∇f(θ)·Δ.
+        # To reduce f with a small step, choose Δ that minimizes this linear term
+        # under a size limit -> Δ = −η ∇f(θ). That is the steepest (Euclidean) descent.
+        # Momentum just adds inertia: keep μ of last velocity (useful when directions persist, otherwise it resists),
+        # then take the same downhill step −η ∇f(θ_t).
 
         max_grad_norm=100,                # For CNNs, gradient clipping is usually not required,
                                           # as exploding gradients are less common compared to RNNs/transformers.
