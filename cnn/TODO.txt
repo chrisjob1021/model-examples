@@ -31,7 +31,7 @@
 
   7. Data Augmentation
 
-  - Reduce RandomErasing to p=0.1 (25% is aggressive)
+  - [ACCEPTED] Reduce RandomErasing to p=0.1 (25% is aggressive)
   - Add MixUp or CutMix for better regularization
 
   8. Learning Rate Scaling

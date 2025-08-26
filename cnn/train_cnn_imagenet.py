@@ -221,15 +221,7 @@ def main():
     num_gpus = torch.cuda.device_count()
     batch_size_per_gpu = 256
     grad_accum = 4
-    num_epochs = 100
-
-    # ------------------ calculate warm-up steps ------------------
-    images = 1_281_167                      # ImageNet-1k train set
-    eff_batch = batch_size_per_gpu * grad_accum * max(1, num_gpus)  # per-GPU × grad_acc × num_gpus
-    steps_per_epoch = (images + eff_batch - 1) // eff_batch # forces rounding up to nearest integer
-    #                                                       # The formula (a + b - 1) // b is equivalent to ceil(a / b)
-    total_steps = steps_per_epoch * num_epochs
-    warmup_steps = int(0.05 * total_steps) 
+    num_epochs = 300 
 
     # Check for existing checkpoints to resume from
     output_dir = f"./results/cnn_results_{'prelu' if use_prelu else 'relu'}"
@@ -248,7 +240,7 @@ def main():
         per_device_eval_batch_size=batch_size_per_gpu,
         learning_rate=0.1,
         weight_decay=1e-4,
-        warmup_steps=warmup_steps, # TODO: get rid of the internal implementation for warmup_steps and use Trainer's
+        warmup_ratio=0.03,  # Use 3% of total training steps for warmup
         gradient_accumulation_steps=grad_accum,
         eval_steps=1,
         logging_steps=100,
@@ -261,13 +253,47 @@ def main():
         dataloader_pin_memory=True,     # If True, the DataLoader will copy Tensors into CUDA pinned memory before returning them.
                                         # This can speed up host-to-GPU transfer, especially for large batches.
         optim="sgd",
-        optim_args="momentum=0.9,nesterov=True",
+        optim_args="momentum=0.95,nesterov=True,dampening=0",
+        # === Momentum SGD variants (one parameter update per step) ====================
+        # Notation:
+        #   theta: params
+        #   v:     velocity/momentum buffer (same shape as theta), init to 0
+        #   mu:    momentum coefficient in [0, 1)  (e.g., 0.9–0.95)
+        #   lr:    learning rate
+        #   g:     gradient at current params, g = ∇f(theta)
+
+        # 1) Heavy-ball (Polyak) momentum
+        # v = mu * v - lr * g(theta)
+        # theta += v
+        #
+        # Intuition: carry over a fraction (mu) of last step and subtract the current
+        # gradient scaled by lr. Gradient is evaluated at the CURRENT point theta.
+
+        # 2) Nesterov (look-ahead) momentum
+        # theta_look = theta + mu * v        # peek ahead along momentum
+        # g_star     = ∇f(theta_look)        # gradient at the look-ahead point
+        # v          = mu * v - lr * g_star
+        # theta     += v
+        #
+        # Intuition: same structure, but the gradient is taken at the anticipated
+        # position.
+
+        # 3) PyTorch implementation of Nesterov (single-pass form)
+        # (what torch.optim.SGD(..., momentum=mu, nesterov=True, dampening=0) does)
+        # b = mu * b + g(theta)               # momentum buffer (EMA of grads)
+        # g_eff = g(theta) + mu * b           # effective Nesterov gradient
+        # theta -= lr * g_eff                 # single update
+        #
+        # Notes:
+        # - Requires: momentum > 0 and dampening == 0 for true Nesterov behavior.
+        # - torch.optim.SGD uses coupled L2 as weight_decay (adds λ*theta to g).
+
         max_grad_norm=0,                # No gradient clipping (max_grad_norm=0): For CNNs, gradient clipping is usually not required,
                                         # as exploding gradients are less common compared to RNNs/transformers.
         lr_scheduler_type="cosine_with_min_lr",  # Cosine with built-in learning rate floor
         lr_scheduler_kwargs={
             "num_cycles": 0.50, # default value, cosine curve ends at 0
-            "min_lr_rate": 0.10,  # Learning rate floor as 10% ratio of initial LR
+            "min_lr_rate": 0.15,  # Learning rate floor as 10% ratio of initial LR
         },
         eval_strategy="epoch",
         save_strategy="epoch",
@@ -278,6 +304,7 @@ def main():
         greater_is_better=False,
         prediction_loss_only=False,
         label_names=["labels"], # need this to get eval_loss
+        label_smoothing_factor=0.05,  # Label smoothing for regularization
         report_to="tensorboard" if not disable_logging else "none",
     )
 
@@ -287,10 +314,11 @@ def main():
     print(f"  Batch size: {training_args.per_device_train_batch_size}")
     print(f"  Learning rate: {training_args.learning_rate}")
     print(f"  Weight decay: {training_args.weight_decay}")
-    print(f"  Warmup steps: {training_args.warmup_steps}")
+    print(f"  Warmup ratio: {training_args.warmup_ratio}")
     print(f"  LR scheduler: {training_args.lr_scheduler_type}")
     print(f"  Optimizer: {training_args.optim}")
     print(f"  Gradient clipping: {training_args.max_grad_norm}")
+    print(f"  Label smoothing: {training_args.label_smoothing_factor}")
     print(f"  Evaluation steps: {training_args.eval_steps}")
     print(f"  Output directory: {training_args.output_dir}")
     print(f"  Remove unused columns: {training_args.remove_unused_columns}")
