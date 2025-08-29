@@ -16,6 +16,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from shared_utils.trainer import ModelTrainer
 from selfdriving.models.trajectory_model import TrajectoryPredictionModel, MultiModalLoss
 from selfdriving.data.ngsim_dataset import get_ngsim_dataloaders
+from selfdriving.data.waymo_dataset import get_waymo_dataloaders
 
 
 class TrajectoryTrainer(Trainer):
@@ -116,9 +117,9 @@ def main():
     
     # Data arguments
     parser.add_argument('--data_path', type=str, default=None,
-                       help='Path to local NGSIM dataset (optional, will try HuggingFace first)')
+                       help='Path to local dataset (for NGSIM or Waymo)')
     parser.add_argument('--dataset_name', type=str, default='ngsim',
-                       help='Name of dataset on HuggingFace')
+                       help='Dataset to use: ngsim or waymo')
     parser.add_argument('--hist_len', type=int, default=30,
                        help='Length of history trajectory')
     parser.add_argument('--pred_len', type=int, default=50,
@@ -172,14 +173,26 @@ def main():
     print(f"Using device: {device}")
     
     # Load datasets
-    print("Loading datasets...")
-    train_loader, val_loader = get_ngsim_dataloaders(
-        data_path=args.data_path,
-        dataset_name=args.dataset_name,
-        batch_size=args.per_device_train_batch_size,
-        hist_len=args.hist_len,
-        pred_len=args.pred_len
-    )
+    print(f"Loading {args.dataset_name} dataset...")
+    
+    if args.dataset_name == 'waymo':
+        if not args.data_path:
+            args.data_path = 'selfdriving/data/waymo'
+        train_loader, val_loader = get_waymo_dataloaders(
+            data_path=args.data_path,
+            batch_size=args.per_device_train_batch_size,
+            hist_len=args.hist_len,
+            pred_len=args.pred_len,
+            cache_path=os.path.join(args.output_dir, 'cache')
+        )
+    else:  # ngsim or other
+        train_loader, val_loader = get_ngsim_dataloaders(
+            data_path=args.data_path,
+            dataset_name=args.dataset_name,
+            batch_size=args.per_device_train_batch_size,
+            hist_len=args.hist_len,
+            pred_len=args.pred_len
+        )
     
     # Initialize model
     print("Initializing model...")
