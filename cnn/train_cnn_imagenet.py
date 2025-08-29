@@ -252,13 +252,23 @@ def main():
         print(f"   LR schedule will restart from beginning for proper cosine annealing")
         print(f"   Output directory: {output_dir}")
         
-        model_checkpoint_file = os.path.join(checkpoint_path, "pytorch_model.bin")
-        if os.path.exists(model_checkpoint_file):
-            state_dict = torch.load(model_checkpoint_file, map_location=device)
+        # Check for both safetensors and pytorch_model.bin formats
+        safetensors_file = os.path.join(checkpoint_path, "model.safetensors")
+        pytorch_bin_file = os.path.join(checkpoint_path, "pytorch_model.bin")
+        
+        if os.path.exists(safetensors_file):
+            # Load from safetensors format
+            from safetensors.torch import load_file
+            state_dict = load_file(safetensors_file, device=str(device))
             model.load_state_dict(state_dict)
-            print("✅ Model weights loaded successfully")
+            print(f"✅ Model weights loaded successfully from {safetensors_file}")
+        elif os.path.exists(pytorch_bin_file):
+            # Load from pytorch bin format
+            state_dict = torch.load(pytorch_bin_file, map_location=device)
+            model.load_state_dict(state_dict)
+            print(f"✅ Model weights loaded successfully from {pytorch_bin_file}")
         else:
-            print(f"⚠️ Checkpoint file not found at {model_checkpoint_file}, starting fresh")
+            print(f"⚠️ Checkpoint file not found (tried {safetensors_file} and {pytorch_bin_file}), starting fresh")
             resume = False
             num_epochs = 300
             output_dir = base_output_dir
