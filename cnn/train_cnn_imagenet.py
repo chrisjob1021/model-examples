@@ -2,6 +2,7 @@
 """Train ReLU CNN on ImageNet using ModelTrainer"""
 
 import torch
+import os
 from datasets import load_from_disk, load_dataset, Dataset
 from transformers import TrainingArguments, TrainerCallback
 import torchvision.transforms as T
@@ -185,6 +186,8 @@ def main():
         num_classes=1000
     )
     
+    # This section moved below after we determine resume status
+    
     # Force fresh weight initialization to ensure clean start
     def reset_weights(m):
         if hasattr(m, 'reset_parameters'):
@@ -220,7 +223,51 @@ def main():
     
     batch_size_per_gpu = 256
     grad_accum = 4
-    num_epochs = 300 
+    
+    # Check if we want to resume from a checkpoint
+    base_output_dir = f"./results/cnn_results_{'prelu' if use_prelu else 'relu'}"
+    resume = True  # Set to True to resume from checkpoint, False for fresh training
+    
+    # Find checkpoint path if resuming
+    if resume:
+        checkpoint_path = find_latest_checkpoint(base_output_dir)
+        if not checkpoint_path:
+            print(f"⚠️ No checkpoint found in {base_output_dir}")
+            print("Available options:")
+            print("1. Set resume = False to start fresh training")
+            print("2. Ensure checkpoint exists in the expected directory")
+            raise ValueError(f"No checkpoint found for resume mode in {base_output_dir}")
+    else:
+        checkpoint_path = None
+    
+    # Configure training based on whether we're resuming
+    if resume:
+        # Extended training configuration when resuming
+        num_epochs = 100  # Train for 100 additional epochs
+        output_dir = f"./results/cnn_resumed_{'prelu' if use_prelu else 'relu'}"
+        
+        # Load model weights (but not optimizer/scheduler state for fresh cosine restart)
+        print(f"🔄 RESUME MODE: Found checkpoint at {checkpoint_path}")
+        print(f"   Loading model weights and training for {num_epochs} additional epochs")
+        print(f"   LR schedule will restart from beginning for proper cosine annealing")
+        print(f"   Output directory: {output_dir}")
+        
+        model_checkpoint_file = os.path.join(checkpoint_path, "pytorch_model.bin")
+        if os.path.exists(model_checkpoint_file):
+            state_dict = torch.load(model_checkpoint_file, map_location=device)
+            model.load_state_dict(state_dict)
+            print("✅ Model weights loaded successfully")
+        else:
+            print(f"⚠️ Checkpoint file not found at {model_checkpoint_file}, starting fresh")
+            resume = False
+            num_epochs = 300
+            output_dir = base_output_dir
+    else:
+        # Original training configuration
+        num_epochs = 300
+        output_dir = base_output_dir
+        print(f"🆕 Starting fresh training for {num_epochs} epochs")
+        print(f"   Output directory: {output_dir}") 
 
     # For ImageNet training, I'd recommend sticking with batch_size=256 rather than 128. Here's why:
 
@@ -254,14 +301,7 @@ def main():
     #     - Conservative enough to avoid instability
     #     - Matches many successful ImageNet papers' settings
 
-    # Check for existing checkpoints to resume from
-    output_dir = f"./results/cnn_results_{'prelu' if use_prelu else 'relu'}"
-    resume_from_checkpoint = False #or find_latest_checkpoint(output_dir)
-    
-    if resume_from_checkpoint:
-        print(f"🔄 Found checkpoint to resume from: {resume_from_checkpoint}")
-    else:
-        print("🆕 No existing checkpoints found, starting fresh training")
+    # Output directory is already set in the resume logic above
 
     # Create training arguments
     training_args = TrainingArguments(
@@ -404,7 +444,7 @@ def main():
         train_dataset=train_dataset,
         eval_dataset=eval_dataset,
         trainer_class=CNNTrainer,
-        resume_from_checkpoint=resume_from_checkpoint,
+        resume_from_checkpoint=False,  # Always False since we want fresh optimizer/scheduler
     )
     
     # Run training
