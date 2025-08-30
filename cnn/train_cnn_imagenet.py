@@ -313,13 +313,21 @@ def main():
 
     # Output directory is already set in the resume logic above
 
+    # Adjust learning rate for resume to prevent spikes
+    if resume:
+        initial_lr = 0.01  # 10x lower than original (0.1 -> 0.01)
+        warmup_ratio = 0.01  # 1% warmup for faster ramp-up when resuming
+    else:
+        initial_lr = 0.1
+        warmup_ratio = 0.05  # Original 5% warmup for fresh training
+    
     # Create training arguments
     training_args = TrainingArguments(
         output_dir=output_dir,
         num_train_epochs=num_epochs,  # More epochs for better convergence
         per_device_train_batch_size=batch_size_per_gpu,  # Reduced for stability
         per_device_eval_batch_size=batch_size_per_gpu,
-        learning_rate=0.1,
+        learning_rate=initial_lr,
         weight_decay=1e-4,
         # A reasonable weight_decay value typically ranges from 1e-4 to 1e-2
         #   Why these values work:
@@ -332,8 +340,7 @@ def main():
         # For vision models like CNNs, 1e-4 is often a good default. 
         # For transformers, values around 1e-2 are sometimes used, especially with AdamW optimizer 
         # which decouples weight decay from gradient-based updates.
-        warmup_ratio=0.05,  # Use 5% of total training steps for warmup
-                            # Tried 3%, it was lagging behind the 5% setting
+        warmup_ratio=warmup_ratio,  # Dynamic warmup based on resume status
         gradient_accumulation_steps=grad_accum,
         eval_steps=1,
         logging_steps=100,
@@ -405,9 +412,7 @@ def main():
         # Momentum just adds inertia: keep μ of last velocity (useful when directions persist, otherwise it resists),
         # then take the same downhill step −η ∇f(θ_t).
 
-        max_grad_norm=100,                # For CNNs, gradient clipping is usually not required,
-                                          # as exploding gradients are less common compared to RNNs/transformers.
-                                          # Setting a value solely to get the grad_norm reported in Tensorboard
+        max_grad_norm=10.0 if resume else 100,  # Moderate clipping when resuming (grad norms were 4-6 during training)
         lr_scheduler_type="cosine_with_min_lr",  # Cosine with built-in learning rate floor
         lr_scheduler_kwargs={
             "num_cycles": 0.50, # default value, cosine curve ends at 0
@@ -430,7 +435,7 @@ def main():
     print(f"\n⚙️ Training Configuration:")
     print(f"  Epochs: {training_args.num_train_epochs}")
     print(f"  Batch size: {training_args.per_device_train_batch_size}")
-    print(f"  Learning rate: {training_args.learning_rate}")
+    print(f"  Learning rate: {training_args.learning_rate} {'(10x lower for resume)' if resume else ''}")
     print(f"  Weight decay: {training_args.weight_decay}")
     print(f"  Warmup ratio: {training_args.warmup_ratio}")
     print(f"  LR scheduler: {training_args.lr_scheduler_type}")
