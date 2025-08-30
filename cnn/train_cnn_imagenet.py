@@ -315,11 +315,16 @@ def main():
 
     # Adjust learning rate for resume to prevent spikes
     if resume:
-        initial_lr = 0.01  # 10x lower than original (0.1 -> 0.01)
-        warmup_ratio = 0.01  # 1% warmup for faster ramp-up when resuming
+        initial_lr = 0.005  # 20x lower than original
+        warmup_ratio = 0.03  # 1% warmup for faster ramp-up when resuming
+        min_lr_rate = 0.05  # Learning rate floor as 10% ratio of initial LR
+        max_grad_norm = 4   # Conservative to prevent loss from spiking at the beginning of resume
     else:
         initial_lr = 0.1
         warmup_ratio = 0.05  # Original 5% warmup for fresh training
+        min_lr_rate = 0.15  # Learning rate floor as 15% ratio of initial LR
+        max_grad_norm = 10  # Never seen this trigger in practice (usually between 3-5)
+                            # Keeping it for reporting and protection
     
     # Create training arguments
     training_args = TrainingArguments(
@@ -412,11 +417,11 @@ def main():
         # Momentum just adds inertia: keep μ of last velocity (useful when directions persist, otherwise it resists),
         # then take the same downhill step −η ∇f(θ_t).
 
-        max_grad_norm=10.0 if resume else 100,  # Moderate clipping when resuming (grad norms were 4-6 during training)
+        max_grad_norm=max_grad_norm,
         lr_scheduler_type="cosine_with_min_lr",  # Cosine with built-in learning rate floor
         lr_scheduler_kwargs={
             "num_cycles": 0.50, # default value, cosine curve ends at 0
-            "min_lr_rate": 0.15,  # Learning rate floor as 15% ratio of initial LR
+            "min_lr_rate": min_lr_rate,  # Learning rate floor as % ratio of initial LR
         },
         eval_strategy="epoch",
         save_strategy="epoch",
@@ -435,11 +440,13 @@ def main():
     print(f"\n⚙️ Training Configuration:")
     print(f"  Epochs: {training_args.num_train_epochs}")
     print(f"  Batch size: {training_args.per_device_train_batch_size}")
-    print(f"  Learning rate: {training_args.learning_rate} {'(10x lower for resume)' if resume else ''}")
+    print(f"  Initial LR: {initial_lr}")
     print(f"  Weight decay: {training_args.weight_decay}")
-    print(f"  Warmup ratio: {training_args.warmup_ratio}")
+    print(f"  Warmup ratio: {warmup_ratio}")
+    print(f"  Min LR rate: {min_lr_rate}")
     print(f"  LR scheduler: {training_args.lr_scheduler_type}")
     print(f"  Optimizer: {training_args.optim}")
+    print(f"  Max grad norm: {max_grad_norm}")
     print(f"  Gradient clipping: {training_args.max_grad_norm}")
     print(f"  Label smoothing: {training_args.label_smoothing_factor}")
     print(f"  Evaluation steps: {training_args.eval_steps}")
