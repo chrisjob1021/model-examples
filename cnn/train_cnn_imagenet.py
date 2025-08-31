@@ -315,10 +315,10 @@ def main():
 
     # Adjust learning rate for resume to prevent spikes
     if resume:
-        initial_lr = 0.005  # 20x lower than original
-        warmup_ratio = 0.03  # 1% warmup for faster ramp-up when resuming
-        min_lr_rate = 0.05  # Learning rate floor as 10% ratio of initial LR
-        max_grad_norm = 4   # Conservative to prevent loss from spiking at the beginning of resume
+        initial_lr = 0.1/2  # Half of learng rate that does not resume
+        warmup_ratio = 0.01  # 1% warmup for faster ramp-up when resuming
+        min_lr_rate = 0.05  # Learning rate floor as 5% ratio of initial LR
+        max_grad_norm = 5   # Conservative to prevent loss from spiking at the beginning of resume
     else:
         initial_lr = 0.1
         warmup_ratio = 0.05  # Original 5% warmup for fresh training
