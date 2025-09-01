@@ -3,6 +3,7 @@
 
 import torch
 import os
+import argparse
 from datasets import load_from_disk, load_dataset, Dataset
 from transformers import TrainingArguments, TrainerCallback
 import torchvision.transforms as T
@@ -88,8 +89,20 @@ class SafeImageNetDataset(Dataset):
 def main():
     """Train ReLU CNN on ImageNet."""
     
+    # Parse command line arguments
+    parser = argparse.ArgumentParser(description="Train ReLU CNN on ImageNet")
+    parser.add_argument("--no-logging", action="store_true", 
+                        help="Disable timestamped logging folders and tensorboard reporting")
+    args = parser.parse_args()
+    
+    # Set debugging options based on command line flags
+    disable_logging = args.no_logging
+    
     print("🚀 Training ReLU CNN on ImageNet")
     print("=" * 50)
+    
+    if disable_logging:
+        print("📝 Logging disabled (no log folders will be created)")
     
     # Check CUDA availability
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -172,9 +185,6 @@ def main():
     print(f"✅ Validation samples: {len(eval_dataset):,}")
     
     use_prelu = True
-    
-    # Debugging options
-    disable_logging = False  # Set to True to disable timestamped logging folders during debugging
     
     # Create CNN model
     activation_type = "PReLU" if use_prelu else "ReLU"
@@ -315,10 +325,11 @@ def main():
 
     # Adjust learning rate for resume to prevent spikes
     if resume:
-        initial_lr = 0.1/5  # 5x less than the original learning rate
-        warmup_ratio = 0.03  # 1% warmup for faster ramp-up when resuming
-        min_lr_rate = 0.10  # Learning rate floor as 10% ratio of initial LR
-        max_grad_norm = 4   # Conservative to prevent loss from spiking at the beginning of resume
+        initial_lr = 0.04  # 5x less than the original learning rate
+        warmup_ratio = 0.03  # 3% warmup for faster ramp-up when resuming
+        min_lr_rate = 0.20  # Learning rate floor as 20% ratio of initial LR
+        max_grad_norm = 3   # Conservative to prevent loss from spiking at the beginning of resume
+                            # This seems to be driving most of the "safety" around restarting with blank trainer states
     else:
         initial_lr = 0.1
         warmup_ratio = 0.05  # Original 5% warmup for fresh training
