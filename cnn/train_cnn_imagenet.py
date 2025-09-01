@@ -315,10 +315,11 @@ def main():
 
     # Adjust learning rate for resume to prevent spikes
     if resume:
-        initial_lr = 0.1/5  # 5x less than the original learning rate
-        warmup_ratio = 0.03  # 1% warmup for faster ramp-up when resuming
-        min_lr_rate = 0.10  # Learning rate floor as 10% ratio of initial LR
+        initial_lr = 0.04  # 5x less than the original learning rate
+        warmup_ratio = 0.03  # 3% warmup for faster ramp-up when resuming
+        min_lr_rate = 0.20  # Learning rate floor as 20% ratio of initial LR
         max_grad_norm = 4   # Conservative to prevent loss from spiking at the beginning of resume
+                            # This seems to be driving most of the "safety" around restarting with blank trainer states
     else:
         initial_lr = 0.1
         warmup_ratio = 0.05  # Original 5% warmup for fresh training
