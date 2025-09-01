@@ -3,6 +3,7 @@
 
 import torch
 import os
+import argparse
 from datasets import load_from_disk, load_dataset, Dataset
 from transformers import TrainingArguments, TrainerCallback
 import torchvision.transforms as T
@@ -88,8 +89,20 @@ class SafeImageNetDataset(Dataset):
 def main():
     """Train ReLU CNN on ImageNet."""
     
+    # Parse command line arguments
+    parser = argparse.ArgumentParser(description="Train ReLU CNN on ImageNet")
+    parser.add_argument("--no-logging", action="store_true", 
+                        help="Disable timestamped logging folders and tensorboard reporting")
+    args = parser.parse_args()
+    
+    # Set debugging options based on command line flags
+    disable_logging = args.no_logging
+    
     print("🚀 Training ReLU CNN on ImageNet")
     print("=" * 50)
+    
+    if disable_logging:
+        print("📝 Logging disabled (no log folders will be created)")
     
     # Check CUDA availability
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -172,9 +185,6 @@ def main():
     print(f"✅ Validation samples: {len(eval_dataset):,}")
     
     use_prelu = True
-    
-    # Debugging options
-    disable_logging = False  # Set to True to disable timestamped logging folders during debugging
     
     # Create CNN model
     activation_type = "PReLU" if use_prelu else "ReLU"
