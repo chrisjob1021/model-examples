@@ -44,6 +44,15 @@ The implementation includes educational features such as manual convolution/pool
   - Saves model checkpoints to `./results`
   - Run: `python train_cnn_imagenet.py`
 
+### Evaluation
+- **`evaluate_model.py`** - Evaluates trained models on validation set
+  - Calculates top-1 and top-5 accuracy percentages
+  - Automatically detects and loads latest checkpoint
+  - Smart activation detection (PReLU vs ReLU)
+  - Progress tracking with real-time metrics
+  - Run: `python evaluate_model.py`
+  - Configuration: Edit the script directly to change settings like batch size or limit batches for testing
+
 ### Analysis & Visualization
 - **`visualize_activations.py`** - Visualizes learned features
   - Shows activation maps for each CNN layer
@@ -114,6 +123,15 @@ scripts/start_tensorboard.sh
 # - Opens http://localhost:6006 in your browser
 ```
 
+### 3. Evaluate Model
+```bash
+# Evaluate the trained model on validation set
+python evaluate_model.py
+
+# To test with limited batches or change settings, edit the configuration 
+# variables at the top of the main() function in evaluate_model.py
+```
+
 ## Key Features
 
 - **PReLU Implementation**: Parametric ReLU as proposed in the original paper for improved accuracy
@@ -122,6 +140,7 @@ scripts/start_tensorboard.sh
 - **Robust Processing**: Handles common ImageNet dataset issues
 - **Modern Training**: Uses HuggingFace Transformers infrastructure
 - **Comprehensive Visualization**: Understand what CNNs learn at each layer
+- **Model Evaluation**: Evaluation script with top-1 and top-5 accuracy metrics
 
 ## Requirements
 
