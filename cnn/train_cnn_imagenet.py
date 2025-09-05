@@ -6,7 +6,6 @@ from datasets import load_from_disk, load_dataset, Dataset
 from transformers import TrainingArguments
 import torchvision.transforms as T
 import torchvision.transforms.v2 as T2
-import numpy as np
 import random
 from torch.utils.data import default_collate
 
@@ -191,8 +190,20 @@ class SafeImageNetDataset(Dataset):
 def main():
     """Train ReLU CNN on ImageNet."""
     
+    # Parse command line arguments
+    parser = argparse.ArgumentParser(description="Train ReLU CNN on ImageNet")
+    parser.add_argument("--no-logging", action="store_true", 
+                        help="Disable timestamped logging folders and tensorboard reporting")
+    args = parser.parse_args()
+    
+    # Set debugging options based on command line flags
+    disable_logging = args.no_logging
+    
     print("🚀 Training ReLU CNN on ImageNet")
     print("=" * 50)
+    
+    if disable_logging:
+        print("📝 Logging disabled (no log folders will be created)")
     
     # Check CUDA availability
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -369,9 +380,6 @@ def main():
     print(f"✅ Validation samples: {len(eval_dataset):,}")
     
     use_prelu = True
-    
-    # Debugging options
-    disable_logging = False  # Set to True to disable timestamped logging folders during debugging
     
     # Create CNN model
     activation_type = "PReLU" if use_prelu else "ReLU"
@@ -616,18 +624,27 @@ def main():
     print(f"\n⚙️ Training Configuration:")
     print(f"  Epochs: {training_args.num_train_epochs}")
     print(f"  Batch size: {training_args.per_device_train_batch_size}")
-    print(f"  Learning rate: {training_args.learning_rate} {'(10x lower for resume)' if resume else ''}")
+    print(f"  Learning rate: {training_args.learning_rate}")
     print(f"  Weight decay: {training_args.weight_decay}")
     print(f"  Warmup ratio: {training_args.warmup_ratio}")
     print(f"  LR scheduler: {training_args.lr_scheduler_type}")
     print(f"  Optimizer: {training_args.optim}")
     print(f"  Gradient clipping: {training_args.max_grad_norm}")
     print(f"  Label smoothing: {training_args.label_smoothing_factor}")
+    print(f"  Evaluation strategy: {training_args.eval_strategy}")
     print(f"  Evaluation steps: {training_args.eval_steps}")
+    print(f"  Save strategy: {training_args.save_strategy}")
+    print(f"  Save steps: {training_args.save_steps}")
+    print(f"  Save total limit: {training_args.save_total_limit}")
+    print(f"  Logging strategy: {training_args.logging_strategy}")
+    print(f"  Logging steps: {training_args.logging_steps}")
     print(f"  Output directory: {training_args.output_dir}")
     print(f"  Remove unused columns: {training_args.remove_unused_columns}")
     print(f"  Dataloader workers: {training_args.dataloader_num_workers}")
-    print(f"  Logging disabled: {disable_logging}")
+    print(f"  Load best model at end: {training_args.load_best_model_at_end}")
+    print(f"  Metric for best model: {training_args.metric_for_best_model}")
+    print(f"  Greater is better: {training_args.greater_is_better}")
+    print(f"  Prediction loss only: {training_args.prediction_loss_only}")
     print(f"  Logging directory: {training_args.logging_dir}")
     print(f"  Report to: {training_args.report_to}")
     
