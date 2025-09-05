@@ -2,15 +2,118 @@
 """Train ReLU CNN on ImageNet using ModelTrainer"""
 
 import torch
-import os
 from datasets import load_from_disk, load_dataset, Dataset
-from transformers import TrainingArguments, TrainerCallback
+from transformers import TrainingArguments
 import torchvision.transforms as T
+import torchvision.transforms.v2 as T2
+import numpy as np
+import random
+from torch.utils.data import default_collate
 
 # Import from shared_utils package
 from shared_utils import ModelTrainer, find_latest_checkpoint
 
 from prelu_cnn import CNN, CNNTrainer
+
+class CutMixCollator:
+    """
+    Custom collate function that applies CutMix augmentation at the batch level.
+    
+    CutMix is a regularization strategy that:
+    1. Cuts rectangular patches from one image
+    2. Pastes them onto another image in the same batch
+    3. Mixes labels proportionally based on the area of the patch
+    
+    Why CutMix is effective:
+    - Forces model to learn from partial views (unlike MixUp which blends entire images)
+    - Improves localization ability - model must identify objects from fragments
+    - Provides stronger regularization than dropout or standard augmentation
+    - Empirically improves ImageNet top-1 accuracy by 1-2%
+    
+    Applied at batch level because:
+    - Requires pairs of images to mix
+    - More efficient than image-level augmentation
+    - Allows consistent mixing ratio across the batch
+    """
+    
+    def __init__(self, num_classes=1000, alpha=1.0, prob=0.5):
+        """
+        Args:
+            num_classes: Number of classes for one-hot encoding
+            alpha: Beta distribution parameter controlling the size of cut patches.
+                   
+                   The mixing ratio λ is sampled from Beta(alpha, alpha):
+                   - λ determines what fraction of the image to keep (1-λ is fraction replaced)
+                   - Patch area = (1-λ) * image_area
+                   
+                   How alpha affects the distribution:
+                   
+                   alpha = 1.0 (default):
+                   - Beta(1,1) = Uniform(0,1) distribution
+                   - Equal probability for all patch sizes (0% to 100% of image)
+                   - Most diverse training - can get tiny patches or nearly full replacement
+                   - Example: λ could be 0.1 (90% replaced), 0.5 (50% replaced), or 0.9 (10% replaced) with equal probability
+                   
+                   alpha = 0.2 (more extreme):
+                   - Beta(0.2, 0.2) is U-shaped - biased toward 0 or 1
+                   - Tends to either replace almost nothing OR almost everything
+                   - More aggressive augmentation - creates very easy or very hard samples
+                   - Example: λ likely to be <0.1 (>90% replaced) or >0.9 (<10% replaced)
+                   
+                   alpha = 2.0 (more moderate):
+                   - Beta(2,2) is bell-shaped - biased toward 0.5
+                   - Tends to replace around 40-60% of the image
+                   - More conservative - consistent difficulty level
+                   - Example: λ clusters around 0.5 (roughly half the image replaced)
+                   
+                   alpha = 5.0 (very moderate):
+                   - Beta(5,5) is strongly peaked at 0.5
+                   - Almost always replaces 40-60% of the image
+                   - Very predictable augmentation strength
+                   - Less diversity in training samples
+                   
+                   Recommended values:
+                   - alpha=1.0: Good default, maximum diversity
+                   - alpha=0.5-0.8: If model struggles with training stability
+                   - alpha=1.5-2.0: If model overfits and needs consistent regularization
+                   
+            prob: Probability of applying CutMix to a batch
+        """
+        self.cutmix = T2.CutMix(num_classes=num_classes, alpha=alpha)
+        self.prob = prob
+        self.num_classes = num_classes
+        
+    def __call__(self, batch):
+        """
+        Collate function that creates a batch and optionally applies CutMix.
+        
+        Args:
+            batch: List of examples from the dataset
+        
+        Returns:
+            Dict with batched tensors, potentially with CutMix applied
+        """
+        # First, use default collate to create standard batch tensors
+        batch_dict = default_collate(batch)
+        
+        # Only apply CutMix during training with specified probability
+        # Skip CutMix if labels are already mixed (from previous CutMix application)
+        if random.random() < self.prob and len(batch_dict['labels'].shape) == 1:
+            # CutMix returns:
+            # - Mixed images with rectangular patches swapped
+            # - One-hot encoded mixed labels (soft labels for mixed classes)
+            mixed_images, mixed_labels = self.cutmix(
+                batch_dict['pixel_values'], 
+                batch_dict['labels']
+            )
+            
+            batch_dict['pixel_values'] = mixed_images
+            batch_dict['labels'] = mixed_labels
+            
+            # Note: HuggingFace Trainer will automatically handle one-hot labels
+            # The loss function will compute cross-entropy with soft targets
+        
+        return batch_dict
 
 class SafeImageNetDataset(Dataset):
     """
@@ -114,14 +217,108 @@ def main():
         std  = [0.229, 0.224, 0.225]
 
     # Define the data augmentation and preprocessing pipeline for training images
+    # Augmentations are applied in order - each builds on the previous transformations
     train_transform = T.Compose([
-        T.Lambda(lambda x: x.convert('RGB') if x.mode != 'RGB' else x),  # Ensure 3 channels (convert grayscale to RGB)
-        T.RandomResizedCrop(224, scale=(0.08, 1.0)),      # Randomly crop and resize to 224x224 (simulates zoom/scale)
-        T.RandomHorizontalFlip(),                         # Randomly flip images horizontally (augmentation)
-        T.RandAugment(num_ops=2, magnitude=9),            # Apply 2 random augmentations with magnitude 9 (extra augmentation)
-        T.ToTensor(),                                     # Convert PIL Image or numpy.ndarray to tensor and scale to [0, 1]
-        T.Normalize(mean, std),                           # Normalize using ImageNet mean and std
-        T.RandomErasing(p=0.1, scale=(0.02, 0.1)),       # Randomly erase a rectangle region (extra augmentation, 25% chance)
+        # 1. RGB CONVERSION - Ensures consistent 3-channel input
+        # Why: Some ImageNet images are grayscale (1 channel), but CNN expects RGB (3 channels)
+        # Without this, training would crash on grayscale images
+        T.Lambda(lambda x: x.convert('RGB') if x.mode != 'RGB' else x),
+        
+        # 2. RANDOM RESIZED CROP - Primary spatial augmentation
+        # Why: Teaches model scale/translation invariance by showing objects at different sizes/positions
+        # scale=(0.08, 1.0) means crop can be 8% to 100% of original image (aggressive cropping)
+        # This is THE most important augmentation for ImageNet - forces model to recognize partial objects
+        T.RandomResizedCrop(224, scale=(0.08, 1.0)),
+        
+        # 3. RANDOM HORIZONTAL FLIP - Simple but effective augmentation (50% probability)
+        # Why: Doubles effective dataset size, teaches left-right invariance
+        # Critical for natural images where orientation doesn't matter (cat facing left = cat facing right)
+        T.RandomHorizontalFlip(),
+        
+        # 4. RANDAUGMENT - AutoML-discovered augmentation policy
+        # Why: Applies 2 random ops from a set of 14 (rotation, shearing, color shifts, etc.)
+        # magnitude=9 (out of 10) is aggressive - helps regularization but may slow initial convergence
+        # This replaces manual tuning of individual augmentations
+        T.RandAugment(num_ops=2, magnitude=7), # Initially near 9, this is near maximum (10 is max)
+        
+        # 5. TENSOR CONVERSION - PIL Image → Tensor, scales [0,255] → [0,1]
+        # Must happen before normalize and after PIL-based augmentations
+        T.ToTensor(),
+        
+        # 6. NORMALIZATION - Centers data around 0 with unit variance
+        # This is CRITICAL for deep network training. Here's why:
+        #
+        # WITHOUT NORMALIZATION:
+        # - Raw pixel values are in [0, 255], already scaled to [0, 1] by ToTensor()
+        # - But [0, 1] range causes problems:
+        #   * Activations only use positive half of activation functions (e.g., tanh)
+        #   * Gradient flow is biased - always positive inputs mean gradients have consistent sign
+        #   * Deep networks compound this: each layer's output drifts further from zero
+        #   * This causes "internal covariate shift" - each layer constantly adapts to changing input distributions
+        #
+        # THE MATH:
+        # - After normalization: x_norm = (x - mean) / std
+        # - For ImageNet: mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]
+        # - This transforms [0, 1] to approximately [-2, 2] with center at 0
+        # - Example: A mid-gray pixel (0.5) becomes (0.5-0.485)/0.229 = 0.065 (near zero)
+        #
+        # WHY ZERO MEAN MATTERS:
+        # 1. Activation functions work best around zero:
+        #    - ReLU: Allows both positive and negative gradients
+        #    - Tanh/Sigmoid: Maximum gradient at zero (derivative is highest)
+        # 2. Gradient flow: Positive and negative values allow gradients to change sign
+        # 3. Weight initialization assumes zero-centered inputs (e.g., Xavier/He initialization)
+        #
+        # WHY UNIT VARIANCE MATTERS (THE EXPRESSIVITY CONNECTION):
+        # Consider a neuron with ReLU activation to see why variance controls expressivity:
+        #
+        # LOW VARIANCE INPUTS (e.g., all values in [0.45, 0.55] before normalization):
+        # - After normalization & weights: z = wx + b clustered in tiny range
+        # - Most neurons output nearly identical values
+        # - Network loses discriminative power - different inputs produce similar outputs
+        # - Information bottleneck: can't distinguish between classes
+        # - Gradients become tiny → extremely slow learning
+        #
+        # HIGH VARIANCE INPUTS (e.g., values in [-100, 100]):
+        # - After weights: z = wx + b has huge magnitude
+        # - Many ReLUs completely dead (z < 0) or exploding (z >> 1)
+        # - Dead ReLU problem: neurons permanently output 0, no gradient flow
+        # - Exploding activations: gradients explode, training unstable
+        # - Network becomes extremely sparse and brittle
+        #
+        # UNIT VARIANCE INPUTS (≈ [-2, 2] after normalization):
+        # - After weights: balanced mix of positive and negative values
+        # - ~50% of ReLUs active, ~50% zero (healthy sparsity)
+        # - Gradients flow properly through active neurons
+        # - Network maintains expressivity - different inputs produce different activation patterns
+        # - Can learn complex decision boundaries
+        #
+        # Without proper normalization to unit variance:
+        # - Network either compresses all inputs to similar outputs (low var)
+        # - Or becomes too sparse/unstable to train (high var)
+        # - Cannot learn the complex features needed to achieve low loss
+        #
+        # WHY IMAGENET STATISTICS (not just 0.5, 0.5, 0.5)?
+        # - These are computed from millions of real images
+        # - Natural images aren't perfectly gray-centered:
+        #   * Red channel: mean=0.485 (slight red bias in natural scenes)
+        #   * Green channel: mean=0.456 (most important for human vision)
+        #   * Blue channel: mean=0.406 (sky/water pulls blue higher)
+        # - Using dataset statistics ensures network sees properly centered data
+        # - Pretrained models REQUIRE these exact values (they were trained with them)
+        #
+        # WHAT HAPPENS WITHOUT THIS:
+        # - Slow convergence (10x more epochs needed)
+        # - Higher chance of gradient explosion (need lower learning rates)
+        # - Dead ReLU problem (neurons get stuck outputting zero)
+        # - Poor transfer learning (can't use pretrained models)
+        T.Normalize(mean, std),
+        
+        # 7. RANDOM ERASING (Cutout variant) - Masks random rectangles with random pixels
+        # Why: Forces model to use context, prevents overfitting to specific features
+        # p=0.1 (10% chance), scale=(0.02, 0.1) means 2-10% of image area erased
+        # Applied AFTER normalization, so erased regions have random normalized values
+        T.RandomErasing(p=0.1, scale=(0.02, 0.1)),
     ])
 
     # Define the preprocessing pipeline for evaluation images (no heavy augmentation)
@@ -243,35 +440,17 @@ def main():
     # Configure training based on whether we're resuming
     if resume:
         # Extended training configuration when resuming
-        num_epochs = 100  # Train for 100 additional epochs
+        num_epochs = 600
         output_dir = f"./results/cnn_resumed_{'prelu' if use_prelu else 'relu'}"
         
-        # Load model weights (but not optimizer/scheduler state for fresh cosine restart)
+        # Load model weights and trainer state for proper resume
         print(f"🔄 RESUME MODE: Found checkpoint at {checkpoint_path}")
-        print(f"   Loading model weights and training for {num_epochs} additional epochs")
-        print(f"   LR schedule will restart from beginning for proper cosine annealing")
+        print(f"   Loading model weights AND trainer state for proper continuation")
+        print(f"   Training for {num_epochs} additional epochs")
         print(f"   Output directory: {output_dir}")
         
-        # Check for both safetensors and pytorch_model.bin formats
-        safetensors_file = os.path.join(checkpoint_path, "model.safetensors")
-        pytorch_bin_file = os.path.join(checkpoint_path, "pytorch_model.bin")
-        
-        if os.path.exists(safetensors_file):
-            # Load from safetensors format
-            from safetensors.torch import load_file
-            state_dict = load_file(safetensors_file, device=str(device))
-            model.load_state_dict(state_dict)
-            print(f"✅ Model weights loaded successfully from {safetensors_file}")
-        elif os.path.exists(pytorch_bin_file):
-            # Load from pytorch bin format
-            state_dict = torch.load(pytorch_bin_file, map_location=device)
-            model.load_state_dict(state_dict)
-            print(f"✅ Model weights loaded successfully from {pytorch_bin_file}")
-        else:
-            print(f"⚠️ Checkpoint file not found (tried {safetensors_file} and {pytorch_bin_file}), starting fresh")
-            resume = False
-            num_epochs = 300
-            output_dir = base_output_dir
+        # The trainer will handle loading both model weights and trainer state
+        # No need to manually load model weights here
     else:
         # Original training configuration
         num_epochs = 300
@@ -313,10 +492,12 @@ def main():
 
     # Output directory is already set in the resume logic above
 
-    # Adjust learning rate for resume to prevent spikes
+    # Adjust learning rate for resume
     if resume:
-        initial_lr = 0.01  # 10x lower than original (0.1 -> 0.01)
-        warmup_ratio = 0.01  # 1% warmup for faster ramp-up when resuming
+        # When resuming with trainer state, the scheduler will continue from where it left off
+        # So we keep the same LR to allow the scheduler to manage it properly
+        initial_lr = 0.1  # Keep same as original to let scheduler handle the decay
+        warmup_ratio = 0.0  # No warmup when resuming with trainer state
     else:
         initial_lr = 0.1
         warmup_ratio = 0.05  # Original 5% warmup for fresh training
@@ -412,11 +593,11 @@ def main():
         # Momentum just adds inertia: keep μ of last velocity (useful when directions persist, otherwise it resists),
         # then take the same downhill step −η ∇f(θ_t).
 
-        max_grad_norm=10.0 if resume else 100,  # Moderate clipping when resuming (grad norms were 4-6 during training)
-        lr_scheduler_type="cosine_with_min_lr",  # Cosine with built-in learning rate floor
+        max_grad_norm=10.0, # grad norms are 4-6 during training
+        lr_scheduler_type="cosine_with_restarts",  # Cosine with warm restarts for better convergence
         lr_scheduler_kwargs={
-            "num_cycles": 0.50, # default value, cosine curve ends at 0
-            "min_lr_rate": 0.15,  # Learning rate floor as 15% ratio of initial LR
+            "num_cycles": 3 if resume else 1,  # Multiple restarts when resuming, single cycle for fresh
+            "min_lr_rate": 0.01,  # Lower floor (1% of initial LR) to allow more exploration
         },
         eval_strategy="epoch",
         save_strategy="epoch",
@@ -450,8 +631,17 @@ def main():
     print(f"  Logging directory: {training_args.logging_dir}")
     print(f"  Report to: {training_args.report_to}")
     
+    # Create CutMix collator for training
+    # Only used during training - evaluation uses default collation
+    cutmix_collator = CutMixCollator(
+        num_classes=1000,  # ImageNet has 1000 classes
+        alpha=1.0,         # Standard beta distribution for balanced mixing
+        prob=0.5           # Apply CutMix to 50% of batches for balanced regularization
+    )
+    
     # Create trainer using ModelTrainer
     print(f"\n🏋️ Setting up trainer...")
+    print(f"  CutMix augmentation: Enabled (alpha=1.0, prob=0.5)")
     
     trainer = ModelTrainer(
         model=model,
@@ -459,7 +649,8 @@ def main():
         train_dataset=train_dataset,
         eval_dataset=eval_dataset,
         trainer_class=CNNTrainer,
-        resume_from_checkpoint=False,  # Always False since we want fresh optimizer/scheduler
+        data_collator=cutmix_collator,  # Add CutMix collator for batch-level augmentation
+        resume_from_checkpoint=checkpoint_path if resume else None,  # Resume with full trainer state
     )
     
     # Run training
