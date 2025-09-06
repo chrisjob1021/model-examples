@@ -602,12 +602,12 @@ def main():
         # Momentum just adds inertia: keep μ of last velocity (useful when directions persist, otherwise it resists),
         # then take the same downhill step −η ∇f(θ_t).
 
-        max_grad_norm=10.0, # grad norms are 4-6 during training
-        lr_scheduler_type="cosine_with_restarts",  # Cosine with warm restarts for better convergence
+        max_grad_norm=10.0, # grad norms are 4-6 during training, this just adds some protection
+        lr_scheduler_type="cosine_with_restarts" if resume else "cosine_with_min_lr",  # Cosine with restarts when resuming, regular cosine for fresh
         lr_scheduler_kwargs={
-            "num_cycles": 3 if resume else 1,  # Multiple restarts when resuming, single cycle for fresh
-            "min_lr_rate": 0.01,  # Lower floor (1% of initial LR) to allow more exploration
-        },
+            "num_cycles": 3,  # Multiple restarts when using cosine_with_restarts
+            "min_lr": 0.10  # Lower floor (10% of initial LR) for regular cosine
+        } if resume else {"min_lr": 0.10},  # Different params for different schedulers
         eval_strategy="epoch",
         save_strategy="epoch",
         logging_strategy="steps",
