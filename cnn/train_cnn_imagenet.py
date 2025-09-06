@@ -453,17 +453,33 @@ def main():
     # Configure training based on whether we're resuming
     if resume:
         # Extended training configuration when resuming
-        num_epochs = 600
+        num_epochs = 300
         output_dir = f"./results/cnn_resumed_{'prelu' if use_prelu else 'relu'}"
         
-        # Load model weights and trainer state for proper resume
+        # Load model weights ONLY (not optimizer/scheduler state)
         print(f"🔄 RESUME MODE: Found checkpoint at {checkpoint_path}")
-        print(f"   Loading model weights AND trainer state for proper continuation")
+        print(f"   Loading model weights ONLY (fresh optimizer/scheduler)")
         print(f"   Training for {num_epochs} additional epochs")
         print(f"   Output directory: {output_dir}")
         
-        # The trainer will handle loading both model weights and trainer state
-        # No need to manually load model weights here
+        # Load the model weights manually
+        import os
+        model_path = os.path.join(checkpoint_path, "model.safetensors")
+        if not os.path.exists(model_path):
+            model_path = os.path.join(checkpoint_path, "pytorch_model.bin")
+        
+        if os.path.exists(model_path):
+            print(f"   Loading weights from: {model_path}")
+            from safetensors.torch import load_file
+            if model_path.endswith(".safetensors"):
+                state_dict = load_file(model_path)
+            else:
+                state_dict = torch.load(model_path, map_location=device)
+            model.load_state_dict(state_dict)
+            print(f"   ✅ Model weights loaded successfully")
+        else:
+            print(f"   ⚠️ Model file not found at {checkpoint_path}")
+            raise FileNotFoundError(f"Could not find model weights in {checkpoint_path}")
     else:
         # Original training configuration
         num_epochs = 300
@@ -507,10 +523,11 @@ def main():
 
     # Adjust learning rate for resume
     if resume:
-        # When resuming with trainer state, the scheduler will continue from where it left off
-        # So we keep the same LR to allow the scheduler to manage it properly
-        initial_lr = 0.1  # Keep same as original to let scheduler handle the decay
-        warmup_ratio = 0.05  # No warmup when resuming with trainer state
+        # When resuming, use a moderate LR since previous training plateaued
+        # Previous training bottomed out at ~0.015, so we need higher than that
+        initial_lr = 0.03  # 30% of original LR - aggressive enough to make progress
+        warmup_ratio = 0.01  # Small 1% warmup for safety
+        print(f"📈 Starting resumed training with LR={initial_lr}")
     else:
         initial_lr = 0.1
         warmup_ratio = 0.05  # Original 5% warmup for fresh training
@@ -607,10 +624,10 @@ def main():
         # then take the same downhill step −η ∇f(θ_t).
 
         max_grad_norm=10.0, # grad norms are 4-6 during training, this just adds some protection
-        lr_scheduler_type="cosine_with_restarts" if resume else "cosine_with_min_lr",  # Cosine with restarts when resuming, regular cosine for fresh
+        lr_scheduler_type="cosine_with_min_lr",  # Use cosine with min LR for both fresh and resume
         lr_scheduler_kwargs={
-            "num_cycles": 3,  # Multiple restarts when using cosine_with_restarts
-        } if resume else {"min_lr": 0.10},  # Different params for different schedulers
+            "min_lr": 0.15,  # 15% of initial LR as minimum
+        },
         eval_strategy="epoch",
         save_strategy="epoch",
         logging_strategy="steps",
@@ -670,7 +687,7 @@ def main():
         eval_dataset=eval_dataset,
         trainer_class=CNNTrainer,
         data_collator=cutmix_collator,  # Add CutMix collator for batch-level augmentation
-        resume_from_checkpoint=checkpoint_path if resume else None,  # Resume with full trainer state
+        resume_from_checkpoint=None,  # Don't resume trainer state - we loaded weights manually
     )
     
     # Run training
