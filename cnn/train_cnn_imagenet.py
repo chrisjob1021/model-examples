@@ -180,7 +180,7 @@ class SafeImageNetDataset(Dataset):
                 print(f"⚠️ Error at index {idx}: {e}, using fallback... (skipped: {self.skipped_count})")
                 batch.append({
                     'pixel_values': torch.zeros(3, 224, 224),
-                    'label': 0
+                    'labels': 0
                 })
         return batch
     
