@@ -351,6 +351,10 @@ def main():
             # Single example processing  
             examples["pixel_values"] = train_transform(examples["image"])
 
+        # Convert 'label' to 'labels' to match HuggingFace Trainer expectations
+        examples["labels"] = examples["label"]
+        del examples["label"]
+        
         # Remove the original image to avoid DataLoader issues
         del examples["image"]
         return examples
@@ -506,7 +510,7 @@ def main():
         # When resuming with trainer state, the scheduler will continue from where it left off
         # So we keep the same LR to allow the scheduler to manage it properly
         initial_lr = 0.1  # Keep same as original to let scheduler handle the decay
-        warmup_ratio = 0.0  # No warmup when resuming with trainer state
+        warmup_ratio = 0.05  # No warmup when resuming with trainer state
     else:
         initial_lr = 0.1
         warmup_ratio = 0.05  # Original 5% warmup for fresh training
@@ -606,7 +610,6 @@ def main():
         lr_scheduler_type="cosine_with_restarts" if resume else "cosine_with_min_lr",  # Cosine with restarts when resuming, regular cosine for fresh
         lr_scheduler_kwargs={
             "num_cycles": 3,  # Multiple restarts when using cosine_with_restarts
-            "min_lr": 0.10  # Lower floor (10% of initial LR) for regular cosine
         } if resume else {"min_lr": 0.10},  # Different params for different schedulers
         eval_strategy="epoch",
         save_strategy="epoch",
@@ -659,7 +662,6 @@ def main():
     
     # Create trainer using ModelTrainer
     print(f"\n🏋️ Setting up trainer...")
-    print(f"  CutMix augmentation: Enabled (alpha=1.0, prob=0.5)")
     
     trainer = ModelTrainer(
         model=model,
