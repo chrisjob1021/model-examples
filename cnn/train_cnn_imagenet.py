@@ -436,7 +436,7 @@ def main():
     
     # Check if we want to resume from a checkpoint
     base_output_dir = f"./results/cnn_results_{'prelu' if use_prelu else 'relu'}"
-    resume = True  # Set to True to resume from checkpoint, False for fresh training
+    resume = False  # Set to True to resume from checkpoint, False for fresh training
     
     # Find checkpoint path if resuming
     if resume:
@@ -482,7 +482,7 @@ def main():
             raise FileNotFoundError(f"Could not find model weights in {checkpoint_path}")
     else:
         # Original training configuration
-        num_epochs = 300
+        num_epochs = 600
         output_dir = base_output_dir
         print(f"🆕 Starting fresh training for {num_epochs} epochs")
         print(f"   Output directory: {output_dir}") 
