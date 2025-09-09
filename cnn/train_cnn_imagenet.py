@@ -628,7 +628,7 @@ def main():
         lr_scheduler_kwargs={
             "min_lr": 0.15,  # 15% of initial LR as minimum
         },
-        eval_strategy="steps",
+        eval_strategy="epoch",
         save_strategy="epoch",
         logging_strategy="steps",
         save_total_limit=3,  # Keep only 3 best checkpoints
