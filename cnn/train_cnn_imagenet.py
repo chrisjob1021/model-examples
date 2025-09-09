@@ -628,7 +628,7 @@ def main():
         lr_scheduler_kwargs={
             "min_lr": 0.15,  # 15% of initial LR as minimum
         },
-        eval_strategy="epoch",
+        eval_strategy="steps",
         save_strategy="epoch",
         logging_strategy="steps",
         save_total_limit=3,  # Keep only 3 best checkpoints
@@ -686,7 +686,7 @@ def main():
         train_dataset=train_dataset,
         eval_dataset=eval_dataset,
         trainer_class=CNNTrainer,
-        data_collator=cutmix_collator,  # Add CutMix collator for batch-level augmentation
+        #data_collator=cutmix_collator,  # Add CutMix collator for batch-level augmentation
         resume_from_checkpoint=None,  # Don't resume trainer state - we loaded weights manually
     )
     
