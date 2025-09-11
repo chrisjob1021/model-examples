@@ -521,15 +521,14 @@ def main():
 
     # Output directory is already set in the resume logic above
 
-    # Adjust learning rate for resume
+    # Adjust learning rate for resume - AdamW uses much lower LRs than SGD
     if resume:
-        # When resuming, use a moderate LR since previous training plateaued
-        # Previous training bottomed out at ~0.015, so we need higher than that
-        initial_lr = 0.03  # 30% of original LR - aggressive enough to make progress
+        # When resuming with AdamW, use a moderate LR
+        initial_lr = 5e-4  # Good starting point for resumed AdamW training
         warmup_ratio = 0.01  # Small 1% warmup for safety
         print(f"📈 Starting resumed training with LR={initial_lr}")
     else:
-        initial_lr = 0.1
+        initial_lr = 1e-3  # Standard starting LR for AdamW on ImageNet
         warmup_ratio = 0.05  # Original 5% warmup for fresh training
     
     # Create training arguments
@@ -539,7 +538,7 @@ def main():
         per_device_train_batch_size=batch_size_per_gpu,  # Reduced for stability
         per_device_eval_batch_size=batch_size_per_gpu,
         learning_rate=initial_lr,
-        weight_decay=1e-4,
+        weight_decay=0.01,  # Standard weight decay for AdamW (higher than SGD)
         # A reasonable weight_decay value typically ranges from 1e-4 to 1e-2
         #   Why these values work:
         #   - Too low (<1e-5): Minimal regularization effect, model may overfit
@@ -563,8 +562,15 @@ def main():
         dataloader_persistent_workers=False,
         dataloader_pin_memory=True,     # If True, the DataLoader will copy Tensors into CUDA pinned memory before returning them.
                                         # This can speed up host-to-GPU transfer, especially for large batches.
-        optim="sgd",
-        optim_args="momentum=0.90,nesterov=True,dampening=0", # Tried 0.95, was trailing behind 0.90
+        optim="adamw",
+        optim_args="betas=(0.9,0.999),eps=1e-08", # Standard AdamW parameters
+        # AdamW optimizer details:
+        # - Decouples weight decay from gradient-based updates (better than Adam for vision)
+        # - betas: (β1, β2) control exponential moving averages of gradients and squared gradients
+        #   - β1=0.9: momentum for gradient (bias towards recent 10 steps)
+        #   - β2=0.999: momentum for squared gradient (bias towards recent 1000 steps)
+        # - eps=1e-08: small constant for numerical stability
+        # - Learning rates for AdamW are typically 10-100x lower than SGD
         # === Momentum SGD variants (one parameter update per step) ====================
         # Notation:
         #   theta: params
@@ -624,9 +630,18 @@ def main():
         # then take the same downhill step −η ∇f(θ_t).
 
         max_grad_norm=10.0, # grad norms are 4-6 during training, this just adds some protection
-        lr_scheduler_type="cosine_with_min_lr",  # Use cosine with min LR for both fresh and resume
+        lr_scheduler_type="cosine_with_restarts",  # Cosine annealing with warm restarts
         lr_scheduler_kwargs={
-            "min_lr": 0.15,  # 15% of initial LR as minimum
+            "num_cycles": 4,  # Number of cosine cycles during training
+            # Cosine with restarts (applies to any optimizer including AdamW):
+            # - Learning rate follows cosine curve from initial_lr to 0
+            # - At each restart, LR jumps back to initial_lr (or slightly lower)
+            # - Benefits:
+            #   1. Escapes local minima by periodic LR increases
+            #   2. Explores multiple regions of parameter space
+            #   3. Can find flatter minima (better generalization)
+            # - With 4 cycles over 600 epochs = ~150 epochs per cycle
+            # - Works especially well with AdamW's adaptive learning rates
         },
         eval_strategy="epoch",
         save_strategy="epoch",
