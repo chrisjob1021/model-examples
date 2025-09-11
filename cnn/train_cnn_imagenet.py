@@ -524,11 +524,11 @@ def main():
     # Adjust learning rate for resume - AdamW uses much lower LRs than SGD
     if resume:
         # When resuming with AdamW, use a moderate LR
-        initial_lr = 5e-4  # Good starting point for resumed AdamW training
+        initial_lr = 3e-4  # Good starting point for resumed AdamW training
         warmup_ratio = 0.01  # Small 1% warmup for safety
         print(f"📈 Starting resumed training with LR={initial_lr}")
     else:
-        initial_lr = 1e-3  # Standard starting LR for AdamW on ImageNet
+        initial_lr = 7e-4  # Standard starting LR for AdamW on ImageNet
         warmup_ratio = 0.05  # Original 5% warmup for fresh training
     
     # Create training arguments
