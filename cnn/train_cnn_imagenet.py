@@ -562,8 +562,10 @@ def main():
         dataloader_persistent_workers=False,
         dataloader_pin_memory=True,     # If True, the DataLoader will copy Tensors into CUDA pinned memory before returning them.
                                         # This can speed up host-to-GPU transfer, especially for large batches.
-        optim="adamw",
-        optim_args="betas=(0.9,0.999),eps=1e-08", # Standard AdamW parameters
+        optim="adamw_torch",
+        adam_beta1=0.9,
+        adam_beta2=0.999,
+        adam_epsilon=1e-08,
         # AdamW optimizer details:
         # - Decouples weight decay from gradient-based updates (better than Adam for vision)
         # - betas: (β1, β2) control exponential moving averages of gradients and squared gradients
