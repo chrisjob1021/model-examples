@@ -528,7 +528,7 @@ def main():
         warmup_ratio = 0.01  # Small 1% warmup for safety
         print(f"📈 Starting resumed training with LR={initial_lr}")
     else:
-        initial_lr = 7e-4  # Standard starting LR for AdamW on ImageNet
+        initial_lr = 5e-4  # Tried 0.1, 7e-4
         warmup_ratio = 0.05  # Original 5% warmup for fresh training
     
     # Create training arguments
@@ -538,18 +538,8 @@ def main():
         per_device_train_batch_size=batch_size_per_gpu,  # Reduced for stability
         per_device_eval_batch_size=batch_size_per_gpu,
         learning_rate=initial_lr,
-        weight_decay=0.01,  # Standard weight decay for AdamW (higher than SGD)
-        # A reasonable weight_decay value typically ranges from 1e-4 to 1e-2
-        #   Why these values work:
-        #   - Too low (<1e-5): Minimal regularization effect, model may overfit
-        #   - Too high (>1e-1): Over-regularization, model underfits and struggles to learn
-        #   - Sweet spot (1e-4 to 1e-2): Balances learning capacity with generalization
-        #   Weight decay (L2 regularization) penalizes large weights by adding λ||w||² to the loss, 
-        #   encouraging the model to use smaller, more distributed weights rather than relying on a few large parameters. 
-
-        # For vision models like CNNs, 1e-4 is often a good default. 
-        # For transformers, values around 1e-2 are sometimes used, especially with AdamW optimizer 
-        # which decouples weight decay from gradient-based updates.
+        weight_decay=5e-3,  # Tried 0.01, CNNs with AdamW: 5e-3 – 0.05 is common. Too high (>0.1) can flatten training
+                            # esp. in the cosine tail when weight decay dominates
         warmup_ratio=warmup_ratio,  # Dynamic warmup based on resume status
         gradient_accumulation_steps=grad_accum,
         eval_steps=1,
