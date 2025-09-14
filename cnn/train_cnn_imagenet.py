@@ -15,6 +15,15 @@ from shared_utils import ModelTrainer, find_latest_checkpoint
 
 from prelu_cnn import CNN, CNNTrainer
 
+from PIL import Image, ImageFile
+import warnings
+
+# Handle corrupt images more gracefully
+ImageFile.LOAD_TRUNCATED_IMAGES = True
+# Suppress EXIF warnings
+warnings.filterwarnings("ignore", category=UserWarning, module="PIL.TiffImagePlugin")
+warnings.filterwarnings("ignore", message="Corrupt EXIF data")
+
 class CutMixCollator:
     """
     Custom collate function that applies CutMix augmentation at the batch level.
@@ -528,7 +537,8 @@ def main():
         warmup_ratio = 0.01  # Small 1% warmup for safety
         print(f"📈 Starting resumed training with LR={initial_lr}")
     else:
-        initial_lr = 1e-4  # Tried 0.1, 7e-4, good progress with 5e-4, even better progress with 3e-4
+        initial_lr = 2e-4   # Tried 0.1, 7e-4, good progress with 5e-4, even better progress with 3e-4
+                            # slow progress with 1e-4
         warmup_ratio = 0.05  # Original 5% warmup for fresh training
     
     # Create training arguments
@@ -550,7 +560,7 @@ def main():
         seed=42,
         logging_dir="./logs/logs" if not disable_logging else None,
         remove_unused_columns=False, # Fix for custom dataset format
-        dataloader_num_workers=8, # Parallel data loading
+        dataloader_num_workers=16,      # Parallel data loading
         dataloader_persistent_workers=False,
         dataloader_pin_memory=True,     # If True, the DataLoader will copy Tensors into CUDA pinned memory before returning them.
                                         # This can speed up host-to-GPU transfer, especially for large batches.
