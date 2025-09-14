@@ -537,8 +537,9 @@ def main():
         warmup_ratio = 0.01  # Small 1% warmup for safety
         print(f"📈 Starting resumed training with LR={initial_lr}")
     else:
-        initial_lr = 2e-4   # Tried 0.1, 7e-4, good progress with 5e-4, even better progress with 3e-4
+        initial_lr = 3e-4   # Tried 0.1, 7e-4, good progress with 5e-4, even better progress with 3e-4
                             # slow progress with 1e-4
+                            # okay progress with 2e-4, but slightly worse than 3e-4
         warmup_ratio = 0.05  # Original 5% warmup for fresh training
     
     # Create training arguments
