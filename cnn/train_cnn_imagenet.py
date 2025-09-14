@@ -528,7 +528,7 @@ def main():
         warmup_ratio = 0.01  # Small 1% warmup for safety
         print(f"📈 Starting resumed training with LR={initial_lr}")
     else:
-        initial_lr = 3e-4  # Tried 0.1, 7e-4, good progress with 5e-4
+        initial_lr = 1e-4  # Tried 0.1, 7e-4, good progress with 5e-4, even better progress with 3e-4
         warmup_ratio = 0.05  # Original 5% warmup for fresh training
     
     # Create training arguments
@@ -540,6 +540,8 @@ def main():
         learning_rate=initial_lr,
         weight_decay=5e-3,  # Tried 0.01, CNNs with AdamW: 5e-3 – 0.05 is common. Too high (>0.1) can flatten training
                             # esp. in the cosine tail when weight decay dominates
+                            # TODO: think about raising this if network overfits with decreased learning rate
+                            #       compare eval to train loss
         warmup_ratio=warmup_ratio,  # Dynamic warmup based on resume status
         gradient_accumulation_steps=grad_accum,
         eval_steps=1,
