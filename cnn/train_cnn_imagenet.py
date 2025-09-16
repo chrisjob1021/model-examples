@@ -567,7 +567,7 @@ def main():
                                         # This can speed up host-to-GPU transfer, especially for large batches.
         optim="adamw_torch",
         adam_beta1=0.9,
-        adam_beta2=0.999,
+        adam_beta2=0.99,  # Effective memory is less, so adjusts faster to spike in learning rate
         adam_epsilon=1e-08,
         # AdamW optimizer details:
         # - Decouples weight decay from gradient-based updates (better than Adam for vision)
@@ -634,20 +634,22 @@ def main():
         # Momentum just adds inertia: keep μ of last velocity (useful when directions persist, otherwise it resists),
         # then take the same downhill step −η ∇f(θ_t).
 
-        max_grad_norm=10.0, # grad norms are 4-6 during training, this just adds some protection
-        lr_scheduler_type="cosine_with_min_lr",  # Cosine annealing with minimum LR
+        max_grad_norm=6.0,
+        lr_scheduler_type="cosine_with_restarts",  # Cosine with hard restarts
         lr_scheduler_kwargs={
-            "min_lr": 1e-6,  # Minimum learning rate (prevents LR from going to 0)
-            # Cosine annealing with minimum LR:
-            # - Learning rate follows cosine curve from initial_lr to min_lr
-            # - Formula: lr = min_lr + (lr_init - min_lr) * (1 + cos(π * t/T)) / 2
-            #   where t = current step, T = total steps
+            "num_cycles": 4,  # Number of cosine cycles as requested
+            # Cosine with hard restarts:
+            # - Learning rate follows multiple cosine cycles from initial_lr to 0
+            # - Each cycle: lr = lr_init * (1 + cos(π * t_cycle/T_cycle)) / 2
+            #   where t_cycle = step within cycle, T_cycle = steps per cycle
+            # - Hard restarts: LR jumps back to initial value at cycle boundaries
             # - Benefits:
-            #   1. Smooth decay helps fine-tuning in later epochs
-            #   2. Non-zero min_lr prevents training from stalling
-            #   3. Allows continued learning even in final epochs
-            # - min_lr=1e-6 keeps a small learning rate for final refinement
-            # - Works well with AdamW's adaptive learning rates
+            #   1. Helps escape local minima with periodic LR boosts
+            #   2. Provides multiple chances for exploration
+            #   3. Can lead to better final solutions
+            # - num_cycles=4 creates 4 complete cosine cycles over training
+            # Note: HuggingFace doesn't support cycle_decay or cycle_warmup_ratio
+            # Note: min_lr is not supported with cosine_with_restarts
         },
         eval_strategy="epoch",
         save_strategy="epoch",
