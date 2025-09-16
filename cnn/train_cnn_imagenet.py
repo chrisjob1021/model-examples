@@ -635,18 +635,19 @@ def main():
         # then take the same downhill step −η ∇f(θ_t).
 
         max_grad_norm=10.0, # grad norms are 4-6 during training, this just adds some protection
-        lr_scheduler_type="cosine_with_restarts",  # Cosine annealing with warm restarts
+        lr_scheduler_type="cosine_with_min_lr",  # Cosine annealing with minimum LR
         lr_scheduler_kwargs={
-            "num_cycles": 4,  # Number of cosine cycles during training
-            # Cosine with restarts (applies to any optimizer including AdamW):
-            # - Learning rate follows cosine curve from initial_lr to 0
-            # - At each restart, LR jumps back to initial_lr (or slightly lower)
+            "min_lr": 1e-6,  # Minimum learning rate (prevents LR from going to 0)
+            # Cosine annealing with minimum LR:
+            # - Learning rate follows cosine curve from initial_lr to min_lr
+            # - Formula: lr = min_lr + (lr_init - min_lr) * (1 + cos(π * t/T)) / 2
+            #   where t = current step, T = total steps
             # - Benefits:
-            #   1. Escapes local minima by periodic LR increases
-            #   2. Explores multiple regions of parameter space
-            #   3. Can find flatter minima (better generalization)
-            # - With 4 cycles over 600 epochs = ~150 epochs per cycle
-            # - Works especially well with AdamW's adaptive learning rates
+            #   1. Smooth decay helps fine-tuning in later epochs
+            #   2. Non-zero min_lr prevents training from stalling
+            #   3. Allows continued learning even in final epochs
+            # - min_lr=1e-6 keeps a small learning rate for final refinement
+            # - Works well with AdamW's adaptive learning rates
         },
         eval_strategy="epoch",
         save_strategy="epoch",
