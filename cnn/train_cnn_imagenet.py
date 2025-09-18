@@ -635,7 +635,7 @@ def main():
         # Momentum just adds inertia: keep μ of last velocity (useful when directions persist, otherwise it resists),
         # then take the same downhill step −η ∇f(θ_t).
 
-        max_grad_norm=6.0,
+        max_grad_norm=5.0,
         lr_scheduler_type="cosine_with_restarts",  # Cosine with hard restarts
         lr_scheduler_kwargs={
             "num_cycles": 4,          # Keep four full cosine cycles over the run
