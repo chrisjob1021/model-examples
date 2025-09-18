@@ -224,18 +224,19 @@ def main():
         print(f"GPU Memory: {torch.cuda.get_device_properties(0).total_memory / 1e9:.1f} GB")
     
     if False:
-        # Load training dataset
+        # Load training dataset from processed version
         dataset_path = "./processed_datasets/imagenet_processor"
         dataset = load_from_disk(dataset_path)
         
         train_dataset = dataset["train"]
         eval_dataset = dataset["validation"]
     else:
-        train_dataset = load_dataset("imagenet-1k", split="train")
-        eval_dataset = load_dataset("imagenet-1k", split="validation")
+        # Load from Hugging Face cache with specific version to avoid re-download
+        train_dataset = load_dataset("imagenet-1k", split="train", revision="1.0.0")
+        eval_dataset = load_dataset("imagenet-1k", split="validation", revision="1.0.0")
 
-        mean = [0.485, 0.456, 0.406]
-        std  = [0.229, 0.224, 0.225]
+    mean = [0.485, 0.456, 0.406]
+    std  = [0.229, 0.224, 0.225]
 
     # Define the data augmentation and preprocessing pipeline for training images
     # Augmentations are applied in order - each builds on the previous transformations
