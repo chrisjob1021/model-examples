@@ -16,6 +16,8 @@ import numpy as np
 from PIL import Image
 import math
 import warnings
+from torch.optim.lr_scheduler import LambdaLR
+from typing import Optional
 
 class ConvAct(nn.Module):
     def __init__(self, in_channels, out_channels, kernel_size, stride=1, padding=0, use_prelu=False, use_builtin_conv=False, prelu_channel_wise=True):
@@ -569,6 +571,76 @@ def preprocess_images(examples):
     }
 
 # -------------------------------------------------------
+# Learning rate helpers
+# -------------------------------------------------------
+
+def get_cosine_with_hard_restarts_decay_schedule_with_warmup(
+    optimizer,
+    *,
+    num_warmup_steps: int,
+    num_training_steps: int,
+    num_cycles: float = 1.0,
+    cycle_decay: float = 1.0,
+    min_lr_ratio: float = 0.0,
+    cycle_warmup_ratio: float = 0.0,
+):
+    """Cosine-with-restarts schedule that decays the peak LR each cycle.
+
+    Hugging Face's built-in ``cosine_with_restarts`` scheduler resets the
+    learning rate to its initial value at every restart. That works well when
+    you only need a handful of restarts, but for long ImageNet runs it tends to
+    blow up the loss because the peak LR never shrinks. This helper mirrors the
+    original schedule while multiplying each cycle by ``cycle_decay`` and keeping
+    a configurable ``min_lr_ratio`` floor relative to the initial LR.
+
+    Args:
+        optimizer: Wrapped optimizer whose LR should be scheduled.
+        num_warmup_steps: Linear warmup steps before cosine kicks in.
+        num_training_steps: Total training steps for the schedule horizon.
+        num_cycles: Number of cosine cycles (can be fractional like 2.5).
+        cycle_decay: Multiplicative decay applied after each restart.
+        min_lr_ratio: Floor as a ratio of the initial LR (0 keeps the default).
+        cycle_warmup_ratio: Fraction of each cosine cycle reserved for a linear
+            warmup from ``min_lr_ratio`` up to the cycle peak (defaults to 0 for
+            the standard cosine shape).
+    """
+
+    num_cycles = max(num_cycles, 1e-6)
+    cycle_decay = max(cycle_decay, 0.0)
+    min_lr_ratio = min(max(min_lr_ratio, 0.0), 1.0)
+    cycle_warmup_ratio = min(max(cycle_warmup_ratio, 0.0), 0.999999)
+
+    def lr_lambda(current_step: int) -> float:
+        if current_step < num_warmup_steps:
+            return float(current_step) / max(1, num_warmup_steps)
+
+        if current_step >= num_training_steps:
+            return min_lr_ratio
+
+        progress = (current_step - num_warmup_steps) / max(1, num_training_steps - num_warmup_steps)
+        cycle_progress = progress * num_cycles
+        cycle_index = math.floor(cycle_progress)
+        within_cycle = cycle_progress - cycle_index
+
+        cycle_scale = cycle_decay ** cycle_index
+        amplitude = (1 - min_lr_ratio) * cycle_scale
+
+        if cycle_warmup_ratio > 0.0 and within_cycle < cycle_warmup_ratio:
+            warm_progress = within_cycle / max(cycle_warmup_ratio, 1e-9)
+            return min_lr_ratio + amplitude * warm_progress
+
+        if cycle_warmup_ratio >= 0.999999:
+            return min_lr_ratio
+
+        cosine_progress = (within_cycle - cycle_warmup_ratio) / max(1e-9, 1.0 - cycle_warmup_ratio)
+        cosine = 0.5 * (1.0 + math.cos(math.pi * cosine_progress))
+
+        return min_lr_ratio + amplitude * cosine
+
+    return LambdaLR(optimizer, lr_lambda)
+
+
+# -------------------------------------------------------
 # Custom Trainer for CNN
 # -------------------------------------------------------
 class CNNTrainer(Trainer):
@@ -620,3 +692,41 @@ class CNNTrainer(Trainer):
                 loss = loss / self.args.gradient_accumulation_steps
 
         return (loss, outputs) if return_outputs else loss
+
+    def create_scheduler(self, num_training_steps: int, optimizer: Optional[torch.optim.Optimizer] = None):
+        """Inject a cosine-restart scheduler with decay when requested."""
+
+        optimizer = optimizer or self.optimizer
+        if optimizer is None:
+            raise ValueError("Optimizer must be set before creating a scheduler.")
+
+        args = self.args
+        lr_kwargs = getattr(args, "lr_scheduler_kwargs", None) or {}
+        use_decay_schedule = (
+            args.lr_scheduler_type == "cosine_with_restarts"
+            and (
+                "cycle_decay" in lr_kwargs
+                or "min_lr_ratio" in lr_kwargs
+                or "cycle_warmup_ratio" in lr_kwargs
+            )
+        )
+
+        if use_decay_schedule:
+            if (
+                self.lr_scheduler is None
+                or getattr(self, "lr_scheduler_num_training_steps", None) != num_training_steps
+            ):
+                warmup_steps = args.get_warmup_steps(num_training_steps)
+                self.lr_scheduler = get_cosine_with_hard_restarts_decay_schedule_with_warmup(
+                    optimizer,
+                    num_warmup_steps=warmup_steps,
+                    num_training_steps=num_training_steps,
+                    num_cycles=lr_kwargs.get("num_cycles", 1.0),
+                    cycle_decay=lr_kwargs.get("cycle_decay", 1.0),
+                    min_lr_ratio=lr_kwargs.get("min_lr_ratio", 0.0),
+                    cycle_warmup_ratio=lr_kwargs.get("cycle_warmup_ratio", 0.0),
+                )
+                self.lr_scheduler_num_training_steps = num_training_steps
+            return self.lr_scheduler
+
+        return super().create_scheduler(num_training_steps, optimizer)

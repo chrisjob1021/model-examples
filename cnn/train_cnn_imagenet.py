@@ -637,19 +637,19 @@ def main():
         max_grad_norm=6.0,
         lr_scheduler_type="cosine_with_restarts",  # Cosine with hard restarts
         lr_scheduler_kwargs={
-            "num_cycles": 4,  # Number of cosine cycles as requested
+            "num_cycles": 4,          # Keep four full cosine cycles over the run
+            "cycle_decay": 0.55,      # Shrink the peak LR after each restart to prevent loss spikes
+            "min_lr_ratio": 0.08,     # Never go below 8% of the base LR so progress keeps smoothing out
+            "cycle_warmup_ratio": 0.1,# Spend 10% of every cycle warming back up so restarts ramp smoothly
             # Cosine with hard restarts:
             # - Learning rate follows multiple cosine cycles from initial_lr to 0
             # - Each cycle: lr = lr_init * (1 + cos(π * t_cycle/T_cycle)) / 2
             #   where t_cycle = step within cycle, T_cycle = steps per cycle
-            # - Hard restarts: LR jumps back to initial value at cycle boundaries
-            # - Benefits:
-            #   1. Helps escape local minima with periodic LR boosts
-            #   2. Provides multiple chances for exploration
-            #   3. Can lead to better final solutions
-            # - num_cycles=4 creates 4 complete cosine cycles over training
-            # Note: HuggingFace doesn't support cycle_decay or cycle_warmup_ratio
-            # Note: min_lr is not supported with cosine_with_restarts
+            # - Hard restarts: LR jumps back toward the initial value at cycle boundaries
+            # - With decay enabled we multiply the peak LR by ``cycle_decay`` each time
+            #   so the schedule behaves like SGDR with shrinking restarts.
+            # - ``cycle_warmup_ratio`` adds a short linear ramp at the start of each
+            #   cycle to keep the LR from spiking instantly after a restart.
         },
         eval_strategy="epoch",
         save_strategy="epoch",
@@ -672,6 +672,8 @@ def main():
     print(f"  Weight decay: {training_args.weight_decay}")
     print(f"  Warmup ratio: {training_args.warmup_ratio}")
     print(f"  LR scheduler: {training_args.lr_scheduler_type}")
+    if training_args.lr_scheduler_kwargs:
+        print(f"  LR scheduler kwargs: {training_args.lr_scheduler_kwargs}")
     print(f"  Optimizer: {training_args.optim}")
     print(f"  Gradient clipping: {training_args.max_grad_norm}")
     print(f"  Label smoothing: {training_args.label_smoothing_factor}")
@@ -720,4 +722,4 @@ def main():
     print(f"\n✅ Training completed successfully!")
 
 if __name__ == "__main__":
-    main() 
+    main()
