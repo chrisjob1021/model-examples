@@ -605,38 +605,92 @@ def get_cosine_with_hard_restarts_decay_schedule_with_warmup(
             the standard cosine shape).
     """
 
+    # Sanitize input parameters to prevent edge cases
+    # Ensure at least a tiny positive number of cycles to avoid division by zero
     num_cycles = max(num_cycles, 1e-6)
+    # Decay can't be negative (that would increase LR over time)
     cycle_decay = max(cycle_decay, 0.0)
+    # min_lr_ratio must be between 0 and 1 (can't go below 0% or above 100% of initial LR)
     min_lr_ratio = min(max(min_lr_ratio, 0.0), 1.0)
+    # cycle_warmup_ratio must be less than 1 (can't warm up for entire cycle)
+    # Using 0.999999 instead of 1.0 to avoid division by zero in cosine calculation
     cycle_warmup_ratio = min(max(cycle_warmup_ratio, 0.0), 0.999999)
 
     def lr_lambda(current_step: int) -> float:
+        """Calculate learning rate multiplier for the given training step.
+        
+        This function returns a multiplier between 0 and 1 that gets applied
+        to the optimizer's initial learning rate.
+        """
+        
+        # PHASE 1: Initial warmup (before any cosine cycles)
+        # Linear ramp from 0 to 1 over num_warmup_steps
         if current_step < num_warmup_steps:
+            # Example: step 50 out of 100 warmup steps → returns 0.5 → LR = 0.5 * initial_lr
             return float(current_step) / max(1, num_warmup_steps)
 
+        # PHASE 2: After all training is done
+        # Maintain minimum learning rate
         if current_step >= num_training_steps:
             return min_lr_ratio
 
+        # PHASE 3: Main cosine cycles with restarts
+        
+        # Calculate where we are in the overall schedule (0.0 to 1.0)
+        # Example: step 1000 out of 10000 total steps (with 100 warmup) → progress = 0.1
         progress = (current_step - num_warmup_steps) / max(1, num_training_steps - num_warmup_steps)
+        
+        # Scale progress by number of cycles to find our position across all cycles
+        # Example: progress=0.4 with num_cycles=4 → cycle_progress = 1.6
         cycle_progress = progress * num_cycles
+        
+        # Determine which cycle we're in (0-indexed)
+        # Example: cycle_progress=1.6 → cycle_index = 1 (we're in the 2nd cycle)
         cycle_index = math.floor(cycle_progress)
+        
+        # Find our position within the current cycle (0.0 to 1.0)
+        # Example: cycle_progress=1.6 → within_cycle = 0.6 (60% through 2nd cycle)
         within_cycle = cycle_progress - cycle_index
 
+        # Calculate decay factor for current cycle
+        # Each cycle's peak LR is reduced by this factor
+        # Example: cycle_decay=0.8, cycle_index=2 → cycle_scale = 0.8^2 = 0.64
         cycle_scale = cycle_decay ** cycle_index
+        
+        # Calculate the amplitude (range) of the current cycle
+        # This shrinks with each cycle due to cycle_scale
+        # Example: min_lr_ratio=0.1, cycle_scale=0.64 → amplitude = 0.9 * 0.64 = 0.576
         amplitude = (1 - min_lr_ratio) * cycle_scale
 
+        # SUB-PHASE 3A: Per-cycle warmup (if enabled)
+        # Linear ramp at the start of each cycle
         if cycle_warmup_ratio > 0.0 and within_cycle < cycle_warmup_ratio:
+            # Calculate progress through the warmup portion of this cycle
+            # Example: within_cycle=0.05, cycle_warmup_ratio=0.1 → warm_progress=0.5
             warm_progress = within_cycle / max(cycle_warmup_ratio, 1e-9)
+            # Linear interpolation from min_lr_ratio to peak of current cycle
+            # Example: min_lr_ratio=0.1, amplitude=0.576 → returns 0.1 + 0.576*0.5 = 0.388
             return min_lr_ratio + amplitude * warm_progress
 
+        # Edge case: if entire cycle is warmup, just return minimum
         if cycle_warmup_ratio >= 0.999999:
             return min_lr_ratio
 
+        # SUB-PHASE 3B: Cosine annealing portion of the cycle
+        # Calculate position in the cosine portion (after per-cycle warmup)
+        # Example: within_cycle=0.6, cycle_warmup_ratio=0.1 → cosine_progress = 0.5/0.9 = 0.556
         cosine_progress = (within_cycle - cycle_warmup_ratio) / max(1e-9, 1.0 - cycle_warmup_ratio)
+        
+        # Apply cosine function (1 at start, 0 at end of cycle)
+        # cos(0) = 1, cos(π) = -1, so 0.5*(1+cos(x)) maps to [1,0]
+        # Example: cosine_progress=0.556 → cosine = 0.5*(1+cos(0.556π)) ≈ 0.206
         cosine = 0.5 * (1.0 + math.cos(math.pi * cosine_progress))
 
+        # Final LR multiplier: base minimum plus scaled cosine value
+        # Example: min_lr_ratio=0.1, amplitude=0.576, cosine=0.206 → returns 0.1 + 0.576*0.206 = 0.219
         return min_lr_ratio + amplitude * cosine
 
+    # Return PyTorch LambdaLR scheduler that will call lr_lambda at each step
     return LambdaLR(optimizer, lr_lambda)
 
 
