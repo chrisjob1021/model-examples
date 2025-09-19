@@ -652,15 +652,14 @@ def get_cosine_with_hard_restarts_decay_schedule_with_warmup(
         # Example: cycle_progress=1.6 → within_cycle = 0.6 (60% through 2nd cycle)
         within_cycle = cycle_progress - cycle_index
 
-        # Calculate decay factor for current cycle
-        # Each cycle's peak LR is reduced by this factor
-        # Example: cycle_decay=0.8, cycle_index=2 → cycle_scale = 0.8^2 = 0.64
-        cycle_scale = cycle_decay ** cycle_index
-        
-        # Calculate the amplitude (range) of the current cycle
-        # This shrinks with each cycle due to cycle_scale
-        # Example: min_lr_ratio=0.1, cycle_scale=0.64 → amplitude = 0.9 * 0.64 = 0.576
-        amplitude = (1 - min_lr_ratio) * cycle_scale
+        # Calculate target peak for this cycle after decay has been applied
+        # Example: cycle_decay=0.55, cycle_index=1 → cycle_peak_ratio = 0.55
+        cycle_peak_ratio = max(min_lr_ratio, cycle_decay ** cycle_index)
+
+        # Calculate the amplitude (difference between peak and minimum)
+        # Clamp to zero in case the decay pushes us below the minimum ratio
+        # Example: min_lr_ratio=0.1, cycle_peak_ratio=0.55 → amplitude = 0.45
+        amplitude = max(0.0, cycle_peak_ratio - min_lr_ratio)
 
         # SUB-PHASE 3A: Per-cycle warmup (if enabled)
         # Linear ramp at the start of each cycle
@@ -669,7 +668,7 @@ def get_cosine_with_hard_restarts_decay_schedule_with_warmup(
             # Example: within_cycle=0.05, cycle_warmup_ratio=0.1 → warm_progress=0.5
             warm_progress = within_cycle / max(cycle_warmup_ratio, 1e-9)
             # Linear interpolation from min_lr_ratio to peak of current cycle
-            # Example: min_lr_ratio=0.1, amplitude=0.576 → returns 0.1 + 0.576*0.5 = 0.388
+            # Example: min_lr_ratio=0.1, amplitude=0.45 → returns 0.1 + 0.45*0.5 = 0.325
             return min_lr_ratio + amplitude * warm_progress
 
         # Edge case: if entire cycle is warmup, just return minimum
@@ -687,7 +686,7 @@ def get_cosine_with_hard_restarts_decay_schedule_with_warmup(
         cosine = 0.5 * (1.0 + math.cos(math.pi * cosine_progress))
 
         # Final LR multiplier: base minimum plus scaled cosine value
-        # Example: min_lr_ratio=0.1, amplitude=0.576, cosine=0.206 → returns 0.1 + 0.576*0.206 = 0.219
+        # Example: min_lr_ratio=0.1, amplitude=0.45, cosine=0.206 → returns 0.1 + 0.45*0.206 ≈ 0.193
         return min_lr_ratio + amplitude * cosine
 
     # Return PyTorch LambdaLR scheduler that will call lr_lambda at each step
