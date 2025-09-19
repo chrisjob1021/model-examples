@@ -80,12 +80,8 @@ class ModelTrainer:
         print("Starting training...")
         train_results = self.trainer.train(resume_from_checkpoint=self.resume_from_checkpoint)
 
-        print("Evaluating model...")
-        eval_results = self.trainer.evaluate()
-
         print(f"Train results: {train_results}")
-        print(f"Eval results: {eval_results}")
-        return self.trainer, train_results, eval_results 
+        return self.trainer, train_results 
     
     def evaluate(self):
         """

@@ -663,22 +663,26 @@ def get_cosine_with_hard_restarts_decay_schedule_with_warmup(
 
         # SUB-PHASE 3A: Per-cycle warmup (if enabled)
         # Linear ramp at the start of each cycle
-        if cycle_warmup_ratio > 0.0 and within_cycle < cycle_warmup_ratio:
+        # IMPORTANT: Do not apply per-cycle warmup to the very first cycle right after
+        # the global warmup. The global warmup already brings LR to the cycle peak.
+        # If we applied a per-cycle warmup here, LR would drop to min and ramp up again.
+        effective_cycle_warmup_ratio = 0.0 if cycle_index == 0 else cycle_warmup_ratio
+        if effective_cycle_warmup_ratio > 0.0 and within_cycle < effective_cycle_warmup_ratio:
             # Calculate progress through the warmup portion of this cycle
             # Example: within_cycle=0.05, cycle_warmup_ratio=0.1 → warm_progress=0.5
-            warm_progress = within_cycle / max(cycle_warmup_ratio, 1e-9)
+            warm_progress = within_cycle / max(effective_cycle_warmup_ratio, 1e-9)
             # Linear interpolation from min_lr_ratio to peak of current cycle
             # Example: min_lr_ratio=0.1, amplitude=0.45 → returns 0.1 + 0.45*0.5 = 0.325
             return min_lr_ratio + amplitude * warm_progress
 
         # Edge case: if entire cycle is warmup, just return minimum
-        if cycle_warmup_ratio >= 0.999999:
+        if effective_cycle_warmup_ratio >= 0.999999:
             return min_lr_ratio
 
         # SUB-PHASE 3B: Cosine annealing portion of the cycle
         # Calculate position in the cosine portion (after per-cycle warmup)
         # Example: within_cycle=0.6, cycle_warmup_ratio=0.1 → cosine_progress = 0.5/0.9 = 0.556
-        cosine_progress = (within_cycle - cycle_warmup_ratio) / max(1e-9, 1.0 - cycle_warmup_ratio)
+        cosine_progress = (within_cycle - effective_cycle_warmup_ratio) / max(1e-9, 1.0 - effective_cycle_warmup_ratio)
         
         # Apply cosine function (1 at start, 0 at end of cycle)
         # cos(0) = 1, cos(π) = -1, so 0.5*(1+cos(x)) maps to [1,0]

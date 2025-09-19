@@ -492,7 +492,7 @@ def main():
             raise FileNotFoundError(f"Could not find model weights in {checkpoint_path}")
     else:
         # Original training configuration
-        num_epochs = 600
+        num_epochs = 300
         output_dir = base_output_dir
         print(f"🆕 Starting fresh training for {num_epochs} epochs")
         print(f"   Output directory: {output_dir}") 
@@ -550,7 +550,7 @@ def main():
         per_device_train_batch_size=batch_size_per_gpu,  # Reduced for stability
         per_device_eval_batch_size=batch_size_per_gpu,
         learning_rate=initial_lr,
-        weight_decay=5e-3,  # Tried 0.01, CNNs with AdamW: 5e-3 – 0.05 is common. Too high (>0.1) can flatten training
+        weight_decay=1e-2,  # Tried 0.01, CNNs with AdamW: 5e-3 – 0.05 is common. Too high (>0.1) can flatten training
                             # esp. in the cosine tail when weight decay dominates
                             # TODO: think about raising this if network overfits with decreased learning rate
                             #       compare eval to train loss
