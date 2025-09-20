@@ -16,7 +16,7 @@ import numpy as np
 from PIL import Image
 import math
 import warnings
-from torch.optim.lr_scheduler import LambdaLR
+from torch.optim.lr_scheduler import _LRScheduler
 from typing import Optional
 
 class ConvAct(nn.Module):
@@ -574,6 +574,121 @@ def preprocess_images(examples):
 # Learning rate helpers
 # -------------------------------------------------------
 
+class CosineWithHardRestartsDecaySchedulerWithWarmup(_LRScheduler):
+    """Cosine restarts with decaying peaks and optional momentum damping."""
+
+    def __init__(
+        self,
+        optimizer,
+        *,
+        num_warmup_steps: int,
+        num_training_steps: int,
+        num_cycles: float = 1.0,
+        cycle_decay: float = 1.0,
+        min_lr_ratio: float = 0.0,
+        cycle_warmup_ratio: float = 0.0,
+        damp_momentum_at_restart: bool = False,
+    ) -> None:
+        self.num_warmup_steps = max(0, int(num_warmup_steps))
+        self.num_training_steps = max(1, int(num_training_steps))
+        self.num_cycles = max(num_cycles, 1e-6)
+        self.cycle_decay = max(cycle_decay, 0.0)
+        self.min_lr_ratio = min(max(min_lr_ratio, 0.0), 1.0)
+        self.cycle_warmup_ratio = min(max(cycle_warmup_ratio, 0.0), 0.999999)
+        self.damp_momentum_at_restart = damp_momentum_at_restart
+
+        # Track which cosine cycle we are in so restarts can damp Adam buffers
+        self._current_cycle_index = -1
+        self._current_cycle_peak_ratio = 1.0
+
+        super().__init__(optimizer)
+
+    def get_lr(self):
+        step = self.last_epoch
+        if step < 0:
+            return list(self.base_lrs)
+
+        multiplier = self._lr_multiplier(step)
+        return [base_lr * multiplier for base_lr in self.base_lrs]
+
+    def step(self, epoch=None):  # type: ignore[override]
+        super().step(epoch)
+        self._maybe_damp_momentum()
+
+    def _lr_multiplier(self, step: int) -> float:
+        if step < self.num_warmup_steps:
+            return float(step) / max(1, self.num_warmup_steps)
+
+        if step >= self.num_training_steps:
+            return self.min_lr_ratio
+
+        cycle_info = self._compute_cycle_info(step)
+        if cycle_info is None:
+            return self.min_lr_ratio
+
+        cycle_index, within_cycle, cycle_peak_ratio, amplitude, effective_warmup = cycle_info
+
+        if effective_warmup > 0.0 and within_cycle < effective_warmup:
+            warm_progress = within_cycle / max(effective_warmup, 1e-9)
+            return self.min_lr_ratio + amplitude * warm_progress
+
+        if effective_warmup >= 0.999999:
+            return self.min_lr_ratio
+
+        cosine_progress = (within_cycle - effective_warmup) / max(1e-9, 1.0 - effective_warmup)
+        cosine = 0.5 * (1.0 + math.cos(math.pi * cosine_progress))
+        return self.min_lr_ratio + amplitude * cosine
+
+    def _compute_cycle_info(self, step: int):
+        if step < self.num_warmup_steps or step >= self.num_training_steps:
+            return None
+
+        progress = (step - self.num_warmup_steps) / max(1, self.num_training_steps - self.num_warmup_steps)
+        cycle_progress = progress * self.num_cycles
+        cycle_index = math.floor(cycle_progress)
+        within_cycle = cycle_progress - cycle_index
+        cycle_peak_ratio = max(self.min_lr_ratio, self.cycle_decay ** cycle_index)
+        amplitude = max(0.0, cycle_peak_ratio - self.min_lr_ratio)
+        effective_warmup = 0.0 if cycle_index == 0 else self.cycle_warmup_ratio
+        return cycle_index, within_cycle, cycle_peak_ratio, amplitude, effective_warmup
+
+    def _maybe_damp_momentum(self) -> None:
+        if not self.damp_momentum_at_restart:
+            return
+
+        cycle_info = self._compute_cycle_info(self.last_epoch)
+        if cycle_info is None:
+            return
+
+        cycle_index, _, cycle_peak_ratio, _, _ = cycle_info
+        if cycle_index == self._current_cycle_index:
+            return
+
+        prev_peak_ratio = self._current_cycle_peak_ratio
+        self._current_cycle_index = cycle_index
+        self._current_cycle_peak_ratio = cycle_peak_ratio
+
+        if cycle_index == 0:
+            return
+
+        scale = cycle_peak_ratio / max(prev_peak_ratio, 1e-12)
+        scale = min(scale, 1.0)
+        if scale < 1.0:
+            self._scale_momentum_buffers(scale)
+
+    def _scale_momentum_buffers(self, scale: float) -> None:
+        for group in self.optimizer.param_groups:
+            for param in group["params"]:
+                state = self.optimizer.state.get(param)
+                if not state:
+                    continue
+                if "exp_avg" in state:
+                    # Shrink AdamW momentum to align with the new peak LR.
+                    state["exp_avg"].mul_(scale)
+                if "exp_avg_sq" in state:
+                    state["exp_avg_sq"].mul_(scale)
+
+
 def get_cosine_with_hard_restarts_decay_schedule_with_warmup(
     optimizer,
     *,
@@ -583,118 +698,27 @@ def get_cosine_with_hard_restarts_decay_schedule_with_warmup(
     cycle_decay: float = 1.0,
     min_lr_ratio: float = 0.0,
     cycle_warmup_ratio: float = 0.0,
+    damp_momentum_at_restart: bool = False,
 ):
     """Cosine-with-restarts schedule that decays the peak LR each cycle.
 
-    Hugging Face's built-in ``cosine_with_restarts`` scheduler resets the
-    learning rate to its initial value at every restart. That works well when
-    you only need a handful of restarts, but for long ImageNet runs it tends to
-    blow up the loss because the peak LR never shrinks. This helper mirrors the
-    original schedule while multiplying each cycle by ``cycle_decay`` and keeping
-    a configurable ``min_lr_ratio`` floor relative to the initial LR.
-
-    Args:
-        optimizer: Wrapped optimizer whose LR should be scheduled.
-        num_warmup_steps: Linear warmup steps before cosine kicks in.
-        num_training_steps: Total training steps for the schedule horizon.
-        num_cycles: Number of cosine cycles (can be fractional like 2.5).
-        cycle_decay: Multiplicative decay applied after each restart.
-        min_lr_ratio: Floor as a ratio of the initial LR (0 keeps the default).
-        cycle_warmup_ratio: Fraction of each cosine cycle reserved for a linear
-            warmup from ``min_lr_ratio`` up to the cycle peak (defaults to 0 for
-            the standard cosine shape).
+    Args mirror :func:`torch.optim.lr_scheduler.CosineAnnealingWarmRestarts` while
+    adding ``cycle_decay`` (shrink the restart peaks), ``min_lr_ratio`` (floor
+    relative to the base LR), ``cycle_warmup_ratio`` (per-cycle warmup fraction),
+    and ``damp_momentum_at_restart`` (scale AdamW momentum buffers when a cycle
+    restarts to avoid a sharp loss spike).
     """
 
-    # Sanitize input parameters to prevent edge cases
-    # Ensure at least a tiny positive number of cycles to avoid division by zero
-    num_cycles = max(num_cycles, 1e-6)
-    # Decay can't be negative (that would increase LR over time)
-    cycle_decay = max(cycle_decay, 0.0)
-    # min_lr_ratio must be between 0 and 1 (can't go below 0% or above 100% of initial LR)
-    min_lr_ratio = min(max(min_lr_ratio, 0.0), 1.0)
-    # cycle_warmup_ratio must be less than 1 (can't warm up for entire cycle)
-    # Using 0.999999 instead of 1.0 to avoid division by zero in cosine calculation
-    cycle_warmup_ratio = min(max(cycle_warmup_ratio, 0.0), 0.999999)
-
-    def lr_lambda(current_step: int) -> float:
-        """Calculate learning rate multiplier for the given training step.
-        
-        This function returns a multiplier between 0 and 1 that gets applied
-        to the optimizer's initial learning rate.
-        """
-        
-        # PHASE 1: Initial warmup (before any cosine cycles)
-        # Linear ramp from 0 to 1 over num_warmup_steps
-        if current_step < num_warmup_steps:
-            # Example: step 50 out of 100 warmup steps → returns 0.5 → LR = 0.5 * initial_lr
-            return float(current_step) / max(1, num_warmup_steps)
-
-        # PHASE 2: After all training is done
-        # Maintain minimum learning rate
-        if current_step >= num_training_steps:
-            return min_lr_ratio
-
-        # PHASE 3: Main cosine cycles with restarts
-        
-        # Calculate where we are in the overall schedule (0.0 to 1.0)
-        # Example: step 1000 out of 10000 total steps (with 100 warmup) → progress = 0.1
-        progress = (current_step - num_warmup_steps) / max(1, num_training_steps - num_warmup_steps)
-        
-        # Scale progress by number of cycles to find our position across all cycles
-        # Example: progress=0.4 with num_cycles=4 → cycle_progress = 1.6
-        cycle_progress = progress * num_cycles
-        
-        # Determine which cycle we're in (0-indexed)
-        # Example: cycle_progress=1.6 → cycle_index = 1 (we're in the 2nd cycle)
-        cycle_index = math.floor(cycle_progress)
-        
-        # Find our position within the current cycle (0.0 to 1.0)
-        # Example: cycle_progress=1.6 → within_cycle = 0.6 (60% through 2nd cycle)
-        within_cycle = cycle_progress - cycle_index
-
-        # Calculate target peak for this cycle after decay has been applied
-        # Example: cycle_decay=0.55, cycle_index=1 → cycle_peak_ratio = 0.55
-        cycle_peak_ratio = max(min_lr_ratio, cycle_decay ** cycle_index)
-
-        # Calculate the amplitude (difference between peak and minimum)
-        # Clamp to zero in case the decay pushes us below the minimum ratio
-        # Example: min_lr_ratio=0.1, cycle_peak_ratio=0.55 → amplitude = 0.45
-        amplitude = max(0.0, cycle_peak_ratio - min_lr_ratio)
-
-        # SUB-PHASE 3A: Per-cycle warmup (if enabled)
-        # Linear ramp at the start of each cycle
-        # IMPORTANT: Do not apply per-cycle warmup to the very first cycle right after
-        # the global warmup. The global warmup already brings LR to the cycle peak.
-        # If we applied a per-cycle warmup here, LR would drop to min and ramp up again.
-        effective_cycle_warmup_ratio = 0.0 if cycle_index == 0 else cycle_warmup_ratio
-        if effective_cycle_warmup_ratio > 0.0 and within_cycle < effective_cycle_warmup_ratio:
-            # Calculate progress through the warmup portion of this cycle
-            # Example: within_cycle=0.05, cycle_warmup_ratio=0.1 → warm_progress=0.5
-            warm_progress = within_cycle / max(effective_cycle_warmup_ratio, 1e-9)
-            # Linear interpolation from min_lr_ratio to peak of current cycle
-            # Example: min_lr_ratio=0.1, amplitude=0.45 → returns 0.1 + 0.45*0.5 = 0.325
-            return min_lr_ratio + amplitude * warm_progress
-
-        # Edge case: if entire cycle is warmup, just return minimum
-        if effective_cycle_warmup_ratio >= 0.999999:
-            return min_lr_ratio
-
-        # SUB-PHASE 3B: Cosine annealing portion of the cycle
-        # Calculate position in the cosine portion (after per-cycle warmup)
-        # Example: within_cycle=0.6, cycle_warmup_ratio=0.1 → cosine_progress = 0.5/0.9 = 0.556
-        cosine_progress = (within_cycle - effective_cycle_warmup_ratio) / max(1e-9, 1.0 - effective_cycle_warmup_ratio)
-        
-        # Apply cosine function (1 at start, 0 at end of cycle)
-        # cos(0) = 1, cos(π) = -1, so 0.5*(1+cos(x)) maps to [1,0]
-        # Example: cosine_progress=0.556 → cosine = 0.5*(1+cos(0.556π)) ≈ 0.206
-        cosine = 0.5 * (1.0 + math.cos(math.pi * cosine_progress))
-
-        # Final LR multiplier: base minimum plus scaled cosine value
-        # Example: min_lr_ratio=0.1, amplitude=0.45, cosine=0.206 → returns 0.1 + 0.45*0.206 ≈ 0.193
-        return min_lr_ratio + amplitude * cosine
-
-    # Return PyTorch LambdaLR scheduler that will call lr_lambda at each step
-    return LambdaLR(optimizer, lr_lambda)
+    return CosineWithHardRestartsDecaySchedulerWithWarmup(
+        optimizer,
+        num_warmup_steps=num_warmup_steps,
+        num_training_steps=num_training_steps,
+        num_cycles=num_cycles,
+        cycle_decay=cycle_decay,
+        min_lr_ratio=min_lr_ratio,
+        cycle_warmup_ratio=cycle_warmup_ratio,
+        damp_momentum_at_restart=damp_momentum_at_restart,
+    )
 
 
 # -------------------------------------------------------
@@ -765,6 +789,7 @@ class CNNTrainer(Trainer):
                 "cycle_decay" in lr_kwargs
                 or "min_lr_ratio" in lr_kwargs
                 or "cycle_warmup_ratio" in lr_kwargs
+                or "damp_momentum_at_restart" in lr_kwargs
             )
         )
 
@@ -782,6 +807,7 @@ class CNNTrainer(Trainer):
                     cycle_decay=lr_kwargs.get("cycle_decay", 1.0),
                     min_lr_ratio=lr_kwargs.get("min_lr_ratio", 0.0),
                     cycle_warmup_ratio=lr_kwargs.get("cycle_warmup_ratio", 0.0),
+                    damp_momentum_at_restart=lr_kwargs.get("damp_momentum_at_restart", False),
                 )
                 self.lr_scheduler_num_training_steps = num_training_steps
             return self.lr_scheduler
