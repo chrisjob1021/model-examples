@@ -642,6 +642,7 @@ def main():
             "cycle_decay": 0.55,      # Shrink the peak LR after each restart to prevent loss spikes
             "min_lr_ratio": 0.08,     # Never go below 8% of the base LR so progress keeps smoothing out
             "cycle_warmup_ratio": 0.1,# Spend 10% of every cycle warming back up so restarts ramp smoothly
+            "damp_momentum_at_restart": True,  # Scale AdamW buffers whenever the LR restarts
             # Cosine with hard restarts:
             # - Learning rate follows multiple cosine cycles from initial_lr to 0
             # - Each cycle: lr = lr_init * (1 + cos(π * t_cycle/T_cycle)) / 2
