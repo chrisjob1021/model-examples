@@ -492,7 +492,7 @@ def main():
             raise FileNotFoundError(f"Could not find model weights in {checkpoint_path}")
     else:
         # Original training configuration
-        num_epochs = 150
+        num_epochs = 300
         output_dir = base_output_dir
         print(f"🆕 Starting fresh training for {num_epochs} epochs")
         print(f"   Output directory: {output_dir}") 
@@ -538,7 +538,7 @@ def main():
         warmup_ratio = 0.01  # Small 1% warmup for safety
         print(f"📈 Starting resumed training with LR={initial_lr}")
     else:
-        initial_lr = 3e-4   # Tried 0.1, 7e-4, good progress with 5e-4, even better progress with 3e-4
+        initial_lr = 2e-4   # Tried 0.1, 7e-4, good progress with 5e-4, even better progress with 3e-4
                             # slow progress with 1e-4
                             # okay progress with 2e-4, but slightly worse than 3e-4
         warmup_ratio = 0.05  # Original 5% warmup for fresh training
@@ -635,11 +635,11 @@ def main():
         # Momentum just adds inertia: keep μ of last velocity (useful when directions persist, otherwise it resists),
         # then take the same downhill step −η ∇f(θ_t).
 
-        max_grad_norm=4.0,
+        max_grad_norm=3.0,
         lr_scheduler_type="cosine_with_restarts",  # Cosine with hard restarts
         lr_scheduler_kwargs={
-            "num_cycles": 4,            # Keep four full cosine cycles over the run
-            "cycle_decay": 0.33,        # Shrink the peak LR after each restart to prevent loss spikes
+            "num_cycles": 6,            # Keep four full cosine cycles over the run
+            "cycle_decay": 0.40,        # Shrink the peak LR after each restart to prevent loss spikes
             "min_lr_ratio": 0.2,        # Never go below % of the base LR so progress keeps smoothing out
             "cycle_warmup_ratio": 0.2,  # Spend % of every cycle warming back up so restarts ramp smoothly
             # Cosine with hard restarts:
