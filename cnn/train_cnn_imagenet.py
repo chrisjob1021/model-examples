@@ -492,7 +492,7 @@ def main():
             raise FileNotFoundError(f"Could not find model weights in {checkpoint_path}")
     else:
         # Original training configuration
-        num_epochs = 300
+        num_epochs = 150
         output_dir = base_output_dir
         print(f"🆕 Starting fresh training for {num_epochs} epochs")
         print(f"   Output directory: {output_dir}") 
@@ -550,7 +550,7 @@ def main():
         per_device_train_batch_size=batch_size_per_gpu,  # Reduced for stability
         per_device_eval_batch_size=batch_size_per_gpu,
         learning_rate=initial_lr,
-        weight_decay=1e-2,  # Tried 0.01, CNNs with AdamW: 5e-3 – 0.05 is common. Too high (>0.1) can flatten training
+        weight_decay=5e-2,  # Tried 0.01, CNNs with AdamW: 5e-3 – 0.05 is common. Too high (>0.1) can flatten training
                             # esp. in the cosine tail when weight decay dominates
                             # TODO: think about raising this if network overfits with decreased learning rate
                             #       compare eval to train loss
@@ -635,14 +635,13 @@ def main():
         # Momentum just adds inertia: keep μ of last velocity (useful when directions persist, otherwise it resists),
         # then take the same downhill step −η ∇f(θ_t).
 
-        max_grad_norm=5.0,
+        max_grad_norm=4.0,
         lr_scheduler_type="cosine_with_restarts",  # Cosine with hard restarts
         lr_scheduler_kwargs={
-            "num_cycles": 4,          # Keep four full cosine cycles over the run
-            "cycle_decay": 0.55,      # Shrink the peak LR after each restart to prevent loss spikes
-            "min_lr_ratio": 0.08,     # Never go below 8% of the base LR so progress keeps smoothing out
-            "cycle_warmup_ratio": 0.1,# Spend 10% of every cycle warming back up so restarts ramp smoothly
-            "damp_momentum_at_restart": True,  # Scale AdamW buffers whenever the LR restarts
+            "num_cycles": 4,            # Keep four full cosine cycles over the run
+            "cycle_decay": 0.33,        # Shrink the peak LR after each restart to prevent loss spikes
+            "min_lr_ratio": 0.2,        # Never go below % of the base LR so progress keeps smoothing out
+            "cycle_warmup_ratio": 0.2,  # Spend % of every cycle warming back up so restarts ramp smoothly
             # Cosine with hard restarts:
             # - Learning rate follows multiple cosine cycles from initial_lr to 0
             # - Each cycle: lr = lr_init * (1 + cos(π * t_cycle/T_cycle)) / 2
