@@ -9,6 +9,7 @@ import torchvision.transforms.v2 as T2
 import random
 from torch.utils.data import default_collate
 import argparse
+from torch.utils.tensorboard import SummaryWriter
 
 # Import from shared_utils package
 from shared_utils import ModelTrainer, find_latest_checkpoint
@@ -237,6 +238,13 @@ def main():
 
     mean = [0.485, 0.456, 0.406]
     std  = [0.229, 0.224, 0.225]
+    
+    # Data augmentation parameters
+    randaugment_ops = 2
+    randaugment_magnitude = 7
+    random_erasing_prob = 0.1
+    cutmix_alpha = 1.0
+    cutmix_prob = 0.5
 
     # Define the data augmentation and preprocessing pipeline for training images
     # Augmentations are applied in order - each builds on the previous transformations
@@ -261,7 +269,7 @@ def main():
         # Why: Applies 2 random ops from a set of 14 (rotation, shearing, color shifts, etc.)
         # magnitude=9 (out of 10) is aggressive - helps regularization but may slow initial convergence
         # This replaces manual tuning of individual augmentations
-        T.RandAugment(num_ops=2, magnitude=7), # Initially near 9, this is near maximum (10 is max)
+        T.RandAugment(num_ops=randaugment_ops, magnitude=randaugment_magnitude),
         
         # 5. TENSOR CONVERSION - PIL Image → Tensor, scales [0,255] → [0,1]
         # Must happen before normalize and after PIL-based augmentations
@@ -340,7 +348,7 @@ def main():
         # Why: Forces model to use context, prevents overfitting to specific features
         # p=0.1 (10% chance), scale=(0.02, 0.1) means 2-10% of image area erased
         # Applied AFTER normalization, so erased regions have random normalized values
-        T.RandomErasing(p=0.1, scale=(0.02, 0.1)),
+        T.RandomErasing(p=random_erasing_prob, scale=(0.02, 0.1)),
     ])
 
     # Define the preprocessing pipeline for evaluation images (no heavy augmentation)
@@ -441,8 +449,8 @@ def main():
     print(f"  Total parameters: {total_params:,}")
     print(f"  Trainable parameters: {trainable_params:,}")
     
-    batch_size_per_gpu = 256
-    grad_accum = 4
+    batch_size_per_gpu = 1024
+    grad_accum = 1
     
     # Check if we want to resume from a checkpoint
     base_output_dir = f"./results/cnn_results_{'prelu' if use_prelu else 'relu'}"
@@ -698,9 +706,9 @@ def main():
     # Create CutMix collator for training
     # Only used during training - evaluation uses default collation
     cutmix_collator = CutMixCollator(
-        num_classes=1000,  # ImageNet has 1000 classes
-        alpha=1.0,         # Standard beta distribution for balanced mixing
-        prob=0.5           # Apply CutMix to 50% of batches for balanced regularization
+        num_classes=1000,      # ImageNet has 1000 classes
+        alpha=cutmix_alpha,    # Beta distribution parameter for patch size control
+        prob=cutmix_prob       # Probability of applying CutMix to batches
     )
     
     # Create trainer using ModelTrainer
@@ -715,6 +723,66 @@ def main():
         #data_collator=cutmix_collator,  # Add CutMix collator for batch-level augmentation
         resume_from_checkpoint=None,  # Don't resume trainer state - we loaded weights manually
     )
+    
+    # Log hyperparameters to TensorBoard
+    if not disable_logging and training_args.logging_dir:
+        writer = SummaryWriter(log_dir=training_args.logging_dir)
+        
+        # Collect all hyperparameters
+        hparams = {
+            # Model architecture
+            'model/activation': activation_type,
+            'model/num_classes': 1000,
+            'model/total_params': total_params,
+            'model/trainable_params': trainable_params,
+            
+            # Training configuration
+            'training/epochs': training_args.num_train_epochs,
+            'training/batch_size_per_gpu': training_args.per_device_train_batch_size,
+            'training/gradient_accumulation': training_args.gradient_accumulation_steps,
+            'training/effective_batch_size': training_args.per_device_train_batch_size * training_args.gradient_accumulation_steps,
+            'training/learning_rate': training_args.learning_rate,
+            'training/weight_decay': training_args.weight_decay,
+            'training/warmup_ratio': training_args.warmup_ratio,
+            'training/label_smoothing': training_args.label_smoothing_factor,
+            'training/max_grad_norm': training_args.max_grad_norm,
+            'training/seed': training_args.seed,
+            
+            # Optimizer
+            'optimizer/type': training_args.optim,
+            'optimizer/adam_beta1': training_args.adam_beta1,
+            'optimizer/adam_beta2': training_args.adam_beta2,
+            'optimizer/adam_epsilon': training_args.adam_epsilon,
+            
+            # Scheduler
+            'scheduler/type': training_args.lr_scheduler_type,
+            'scheduler/num_cycles': training_args.lr_scheduler_kwargs.get('num_cycles', 0) if training_args.lr_scheduler_kwargs else 0,
+            'scheduler/cycle_decay': training_args.lr_scheduler_kwargs.get('cycle_decay', 0) if training_args.lr_scheduler_kwargs else 0,
+            'scheduler/min_lr_ratio': training_args.lr_scheduler_kwargs.get('min_lr_ratio', 0) if training_args.lr_scheduler_kwargs else 0,
+            'scheduler/cycle_warmup_ratio': training_args.lr_scheduler_kwargs.get('cycle_warmup_ratio', 0) if training_args.lr_scheduler_kwargs else 0,
+            
+            # Data augmentation
+            'augmentation/cutmix_alpha': cutmix_alpha,
+            'augmentation/cutmix_prob': cutmix_prob,
+            'augmentation/randaugment_ops': randaugment_ops,
+            'augmentation/randaugment_magnitude': randaugment_magnitude,
+            'augmentation/random_erasing_prob': random_erasing_prob,
+            
+            # System
+            'system/num_workers': training_args.dataloader_num_workers,
+            'system/pin_memory': training_args.dataloader_pin_memory,
+            'system/resume_mode': resume,
+            'system/device': str(device),
+        }
+        
+        # Log hyperparameters using add_hparams
+        # The second argument is for metrics (we'll leave empty for now as they'll be logged during training)
+        writer.add_hparams(hparams, {})
+        writer.flush()
+        writer.close()
+        
+        print(f"📊 Logged {len(hparams)} hyperparameters to TensorBoard")
+        print(f"   View with: tensorboard --logdir {training_args.logging_dir}")
     
     # Run training
     trainer.run()
