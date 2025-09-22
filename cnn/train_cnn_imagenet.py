@@ -643,22 +643,18 @@ def main():
         # Momentum just adds inertia: keep μ of last velocity (useful when directions persist, otherwise it resists),
         # then take the same downhill step −η ∇f(θ_t).
 
-        max_grad_norm=3.0,
-        lr_scheduler_type="cosine_with_restarts",  # Cosine with hard restarts
+        max_grad_norm=8.0,
+        lr_scheduler_type="cosine_with_min_lr",  # Cosine annealing with minimum LR
         lr_scheduler_kwargs={
-            "num_cycles": 6,            # Keep six full cosine cycles over the run
-            "cycle_decay": 0.75,        # Gentler decay - each cycle is 75% of previous (was 0.40)
-            "min_lr_ratio": 0.05,       # Allow deeper valleys between cycles (was 0.2)
-            "cycle_warmup_ratio": 0.2,  # Spend % of every cycle warming back up so restarts ramp smoothly
-            # Cosine with hard restarts:
-            # - Learning rate follows multiple cosine cycles from initial_lr to 0
-            # - Each cycle: lr = lr_init * (1 + cos(π * t_cycle/T_cycle)) / 2
-            #   where t_cycle = step within cycle, T_cycle = steps per cycle
-            # - Hard restarts: LR jumps back toward the initial value at cycle boundaries
-            # - With decay enabled we multiply the peak LR by ``cycle_decay`` each time
-            #   so the schedule behaves like SGDR with shrinking restarts.
-            # - ``cycle_warmup_ratio`` adds a short linear ramp at the start of each
-            #   cycle to keep the LR from spiking instantly after a restart.
+            "min_lr_ratio": 0.10,  # Minimum LR as ratio of initial LR (% of initial)
+            # Cosine annealing with min_lr:
+            # - Learning rate follows a single cosine curve from initial_lr to min_lr
+            # - min_lr = initial_lr * min_lr_ratio
+            # - lr = min_lr + (initial_lr - min_lr) * (1 + cos(π * t/T)) / 2
+            #   where t = current step, T = total steps
+            # - Smooth decay without restarts
+            # - min_lr_ratio prevents learning rate from going to zero, maintaining some gradient flow
+            # - Common values: 0.01 (1%), 0.001 (0.1%), or 0.1 (10%)
         },
         eval_strategy="epoch",
         save_strategy="epoch",
@@ -756,10 +752,7 @@ def main():
             
             # Scheduler
             'scheduler/type': training_args.lr_scheduler_type,
-            'scheduler/num_cycles': training_args.lr_scheduler_kwargs.get('num_cycles', 0) if training_args.lr_scheduler_kwargs else 0,
-            'scheduler/cycle_decay': training_args.lr_scheduler_kwargs.get('cycle_decay', 0) if training_args.lr_scheduler_kwargs else 0,
             'scheduler/min_lr_ratio': training_args.lr_scheduler_kwargs.get('min_lr_ratio', 0) if training_args.lr_scheduler_kwargs else 0,
-            'scheduler/cycle_warmup_ratio': training_args.lr_scheduler_kwargs.get('cycle_warmup_ratio', 0) if training_args.lr_scheduler_kwargs else 0,
             
             # Data augmentation
             'augmentation/cutmix_alpha': cutmix_alpha,
