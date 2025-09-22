@@ -646,9 +646,9 @@ def main():
         max_grad_norm=3.0,
         lr_scheduler_type="cosine_with_restarts",  # Cosine with hard restarts
         lr_scheduler_kwargs={
-            "num_cycles": 6,            # Keep four full cosine cycles over the run
-            "cycle_decay": 0.40,        # Shrink the peak LR after each restart to prevent loss spikes
-            "min_lr_ratio": 0.2,        # Never go below % of the base LR so progress keeps smoothing out
+            "num_cycles": 6,            # Keep six full cosine cycles over the run
+            "cycle_decay": 0.75,        # Gentler decay - each cycle is 75% of previous (was 0.40)
+            "min_lr_ratio": 0.05,       # Allow deeper valleys between cycles (was 0.2)
             "cycle_warmup_ratio": 0.2,  # Spend % of every cycle warming back up so restarts ramp smoothly
             # Cosine with hard restarts:
             # - Learning rate follows multiple cosine cycles from initial_lr to 0
