@@ -643,7 +643,7 @@ def main():
         # Momentum just adds inertia: keep μ of last velocity (useful when directions persist, otherwise it resists),
         # then take the same downhill step −η ∇f(θ_t).
 
-        max_grad_norm=8.0,
+        max_grad_norm=10.0,
         lr_scheduler_type="cosine_with_min_lr",  # Cosine annealing with minimum LR
         lr_scheduler_kwargs={
             "min_lr_ratio": 0.10,  # Minimum LR as ratio of initial LR (% of initial)
