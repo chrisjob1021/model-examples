@@ -752,7 +752,7 @@ def main():
             
             # Scheduler
             'scheduler/type': training_args.lr_scheduler_type,
-            'scheduler/min_lr_ratio': training_args.lr_scheduler_kwargs.get('min_lr_ratio', 0) if training_args.lr_scheduler_kwargs else 0,
+            'scheduler/min_lr': training_args.lr_scheduler_kwargs.get('min_lr', 0) if training_args.lr_scheduler_kwargs else 0,
             
             # Data augmentation
             'augmentation/cutmix_alpha': cutmix_alpha,
