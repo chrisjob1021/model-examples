@@ -37,7 +37,7 @@ Markdown==3.8.2
 MarkupSafe==3.0.2
 matplotlib==3.10.3
 matplotlib-inline==0.1.7
--e git+https://github.com/chrisjob1021/model-examples.git@3aaae50e4bbcdef6e329a36dfc1a1baa31970896#egg=model_examples
+-e git+https://github.com/chrisjob1021/model-examples.git@1dd0c180d500617ba327fa36b2b3efa6f73a6790#egg=model_examples
 mpmath==1.3.0
 multidict==6.5.0
 multiprocess==0.70.16
