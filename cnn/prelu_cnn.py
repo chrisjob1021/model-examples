@@ -23,7 +23,8 @@ class ConvAct(nn.Module):
     def __init__(self, in_channels, out_channels, kernel_size, stride=1, padding=0, use_prelu=False, use_builtin_conv=False, prelu_channel_wise=True):
         super().__init__()
         self.conv = ManualConv2d(in_channels, out_channels, kernel_size=kernel_size, stride=stride, padding=padding, use_builtin=use_builtin_conv)
-        
+        self.bn = nn.BatchNorm2d(out_channels)
+
         # Create appropriate activation function
         if use_prelu:
             # Channel-wise: one parameter per output channel
@@ -33,7 +34,71 @@ class ConvAct(nn.Module):
             self.act = nn.ReLU(inplace=True)
 
     def forward(self, x):
-        return self.act(self.conv(x))
+        x = self.conv(x)
+        x = self.bn(x)
+        return self.act(x)
+
+class ResidualBlock(nn.Module):
+    """Residual block with skip connection for better gradient flow"""
+    def __init__(self, in_channels, out_channels, kernel_size=3, stride=1, use_prelu=False, use_builtin_conv=False, prelu_channel_wise=True):
+        super().__init__()
+        # Calculate padding to maintain spatial dimensions
+        # Convolution output size formula:
+        #   output_size = floor((input_size + 2*padding - kernel_size) / stride) + 1
+        #
+        # For same padding (output_size = input_size) with stride=1:
+        # Let's call input_size = S for clarity
+        #   S = floor((S + 2*padding - kernel_size) / 1) + 1
+        #   S = S + 2*padding - kernel_size + 1
+        #   S - S = 2*padding - kernel_size + 1
+        #   0 = 2*padding - kernel_size + 1
+        #   -2*padding = -kernel_size + 1
+        #   2*padding = kernel_size - 1
+        #   padding = (kernel_size - 1) / 2
+        #
+        # For odd kernel sizes, this gives:
+        #   3x3: padding = (3-1)/2 = 1
+        #   5x5: padding = (5-1)/2 = 2
+        #   7x7: padding = (7-1)/2 = 3
+        #
+        # Verification with 3x3 kernel, padding=1, input=32:
+        #   output = floor((32 + 2*1 - 3) / 1) + 1 = floor(31) + 1 = 32 ✓
+        padding = kernel_size // 2
+
+        # Main convolution path
+        self.conv1 = ConvAct(in_channels, out_channels, kernel_size, stride=stride, padding=padding,
+                             use_prelu=use_prelu, use_builtin_conv=use_builtin_conv, prelu_channel_wise=prelu_channel_wise)
+        self.conv2 = ManualConv2d(out_channels, out_channels, kernel_size=kernel_size, stride=1, padding=padding, use_builtin=use_builtin_conv)
+        self.bn2 = nn.BatchNorm2d(out_channels)
+
+        # Shortcut connection (identity or projection)
+        self.shortcut = nn.Sequential()
+        if stride != 1 or in_channels != out_channels:
+            # 1x1 conv to match dimensions when needed
+            self.shortcut = nn.Sequential(
+                nn.Conv2d(in_channels, out_channels, kernel_size=1, stride=stride, bias=False),
+                nn.BatchNorm2d(out_channels)
+            )
+
+        # Final activation after addition
+        if use_prelu:
+            self.final_act = nn.PReLU(out_channels if prelu_channel_wise else 1)
+        else:
+            self.final_act = nn.ReLU(inplace=True)
+
+    def forward(self, x):
+        identity = x
+
+        # Main path
+        out = self.conv1(x)
+        out = self.conv2(out)
+        out = self.bn2(out)
+
+        # Add shortcut
+        out += self.shortcut(identity)
+        out = self.final_act(out)
+
+        return out
 
 # -------------------------------------------------------
 # Manual 2D convolution layer implemented with nested loops
@@ -332,32 +397,84 @@ class CNN(nn.Module):
                 stacklevel=2
             )
         
+        # Spatial dimension flow through the network:
+        # 1. Input: 224×224
+        # 2. conv1 (7×7, stride=2, pad=3): (224 + 2*3 - 7)/2 + 1 = 112×112
+        # 3. MaxPool (3×3, stride=3): (112 - 3)/3 + 1 = 37×37
+        # 4. conv2 first ResidualBlock (stride=2): (37 - 1)/2 + 1 = 19×19
+        # 5. conv2 remaining 2 blocks (stride=1): stays 19×19
+        # 6. conv3 first ResidualBlock (stride=2): (19 - 1)/2 + 1 = 10×10
+        # 7. conv3 remaining 3 blocks (stride=1): stay 10×10
+        # 8. conv4 first ResidualBlock (stride=2): (10 - 1)/2 + 1 = 5×5
+        # 9. conv4 remaining 5 blocks (stride=1): stay 5×5
+        # 10. conv5 all 3 blocks (stride=1): stay 5×5
+
         # Layer 1: 7×7 conv, 64 filters, stride=2 (ImageNet input: 224×224)
+        # We keep max pooling here (but replace it with stride=2 convs in later layers) because:
+        # - Early layers detect simple features (edges/textures) where max pooling works well
+        # - Rapid spatial reduction (112→37) reduces computation for all subsequent layers
+        # - Standard practice in ResNet, VGG, and the original PReLU paper
+        # - Only deeper layers with complex features benefit from learned downsampling
         self.conv1 = nn.Sequential(
             ConvAct(3, 64, kernel_size=7, stride=2, padding=3, use_prelu=use_prelu, use_builtin_conv=use_builtin_conv, prelu_channel_wise=prelu_channel_wise),  # 224×224 → 112×112
             ManualMaxPool2d(kernel_size=3, stride=3, padding=0, use_builtin=use_builtin_conv)  # 112×112 → 37×37
         )
-        
-        # conv2_x: 4 layers of 2×2, 128 filters
+
+        # Improved architecture based on ResNet principles:
+        # - Replace 2×2 kernels → 3×3 (better receptive field growth)
+        # - Add residual connections (solves vanishing gradients)
+        # - Use stride=2 convolutions instead of max pooling (learnable downsampling)
+        #   Reference: "Striving for Simplicity: The All Convolutional Net" (2014)
+        #   Shows stride=2 convs preserve more information than max pooling
+
+        # Following ResNet-34 architecture: [3, 4, 6, 3] blocks per stage
+        # Total layers: 1 (conv1) + 3×2 + 4×2 + 6×2 + 3×2 = 1 + 6 + 8 + 12 + 6 = 33 conv layers
+
+        # conv2_x: 3 residual blocks, 128 channels
         self.conv2 = nn.Sequential(
-            *[ConvAct(64 if i == 0 else 128, 128, kernel_size=2, stride=1, padding=0, use_prelu=use_prelu, use_builtin_conv=use_builtin_conv, prelu_channel_wise=prelu_channel_wise) for i in range(4)],  # 37×37 → 36×36 → 35×35 → 34×34 → 33×33
-            ManualMaxPool2d(kernel_size=2, stride=2, use_builtin=use_builtin_conv)  # 33×33 → 16×16
+            *[ResidualBlock(64 if i == 0 else 128, 128, kernel_size=3, stride=2 if i == 0 else 1,
+                          use_prelu=use_prelu, use_builtin_conv=use_builtin_conv, prelu_channel_wise=prelu_channel_wise)
+              for i in range(3)]  # 37×37 → 19×19, then stays 19×19
         )
-        
-        # conv3_x: 6 layers of 2×2, 256 filters  
+
+        # conv3_x: 4 residual blocks, 256 channels
         self.conv3 = nn.Sequential(
-            *[ConvAct(128 if i == 0 else 256, 256, kernel_size=2, stride=1, padding=0, use_prelu=use_prelu, use_builtin_conv=use_builtin_conv, prelu_channel_wise=prelu_channel_wise) for i in range(6)],  # 16×16 → 15×15 → 14×14 → 13×13 → 12×12 → 11×11
+            *[ResidualBlock(128 if i == 0 else 256, 256, kernel_size=3, stride=2 if i == 0 else 1,
+                          use_prelu=use_prelu, use_builtin_conv=use_builtin_conv, prelu_channel_wise=prelu_channel_wise)
+              for i in range(4)]  # 19×19 → 10×10, then stays 10×10
+        )
+
+        # conv4_x: 6 residual blocks, 512 channels
+        self.conv4 = nn.Sequential(
+            *[ResidualBlock(256 if i == 0 else 512, 512, kernel_size=3, stride=2 if i == 0 else 1,
+                          use_prelu=use_prelu, use_builtin_conv=use_builtin_conv, prelu_channel_wise=prelu_channel_wise)
+              for i in range(6)]  # 10×10 → 5×5, then stays 5×5
+        )
+
+        # conv5_x: 3 residual blocks, 512 channels (no stride reduction)
+        self.conv5 = nn.Sequential(
+            *[ResidualBlock(512, 512, kernel_size=3, stride=1,
+                          use_prelu=use_prelu, use_builtin_conv=use_builtin_conv, prelu_channel_wise=prelu_channel_wise)
+              for i in range(3)]  # 5×5 → 5×5 (stays same size)
         )
         
         # Spatial Pyramid Pooling (as used in PReLU paper)
-        # Levels {6,3,2,1} create 6²+3²+2²+1² = 36+9+4+1 = 50 bins per channel
+        # Updated for 5×5 feature maps (was 10×10 before conv4/conv5, 11×11 with original)
+        #
+        # With 5×5 feature maps, we use levels [5,2,1]:
+        # - Level 5: 5×5 grid = entire feature map (25 bins)
+        # - Level 2: 2×2 grid (4 bins)
+        # - Level 1: 1×1 grid = global pooling (1 bin)
+        #
+        # Total bins: 5²+2²+1² = 25+4+1 = 30 bins per channel
+        # With 512 channels from conv5: 512 × 30 = 15,360 features fed to classifier
         self.spp = nn.Sequential(
-            SpatialPyramidPooling(levels=[6, 3, 2, 1]),
+            SpatialPyramidPooling(levels=[5, 2, 1]),
             nn.Flatten(1),
         )
-        
+
         self.classifier = nn.Sequential(
-            nn.Linear(256 * 50, 4096, bias=True),               # 12 800 → 4 096
+            nn.Linear(512 * 30, 4096, bias=True),               # 15,360 → 4,096
             nn.PReLU(4096 if (use_prelu and prelu_channel_wise) else 1)
                 if use_prelu else nn.ReLU(inplace=True),
             nn.Dropout(0.5),                                    # ← after fc1 activation
@@ -385,9 +502,11 @@ class CNN(nn.Module):
         x = self.conv1(input_tensor)
         x = self.conv2(x)
         x = self.conv3(x)
-        
+        x = self.conv4(x)
+        x = self.conv5(x)
+
         # Apply SPP and flatten
-        x = self.spp(x)  # (batch, 256, 50)
+        x = self.spp(x)  # (batch, 512 * 30)
         
         return self.classifier(x)
 
