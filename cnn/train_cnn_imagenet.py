@@ -646,7 +646,7 @@ def main():
         max_grad_norm=10.0,
         lr_scheduler_type="cosine_with_min_lr",  # Cosine annealing with minimum LR
         lr_scheduler_kwargs={
-            "min_lr_ratio": 0.10,  # Minimum LR as ratio of initial LR (% of initial)
+            "min_lr": 0.10,  # Minimum LR as ratio of initial LR (% of initial)
             # Cosine annealing with min_lr:
             # - Learning rate follows a single cosine curve from initial_lr to min_lr
             # - min_lr = initial_lr * min_lr_ratio
