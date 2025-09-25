@@ -768,9 +768,15 @@ def main():
             'system/device': str(device),
         }
         
-        # Log hyperparameters using add_hparams
-        # The second argument is for metrics (we'll leave empty for now as they'll be logged during training)
-        writer.add_hparams(hparams, {})
+        # Log hyperparameters as scalars (avoids creating separate hparams file)
+        for key, value in hparams.items():
+            writer.add_scalar(f'hparams/{key}', value, 0)
+
+        # Also log as text summary for easy viewing
+        import json
+        hparams_text = json.dumps(hparams, indent=2)
+        writer.add_text('hyperparameters', f'```json\n{hparams_text}\n```', 0)
+
         writer.flush()
         writer.close()
         
