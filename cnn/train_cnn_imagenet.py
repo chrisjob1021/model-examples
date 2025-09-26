@@ -135,43 +135,86 @@ class SafeImageNetDataset(Dataset):
         self.dataset = dataset
         self.transform_fn = transform_fn
         self.skipped_count = 0
-        
+
+        # Pre-cache known good images as fallbacks
+        # Spread across dataset to get variety of classes
+        self.fallback_indices = [0, 1000, 5000, 10000, 20000, 30000, 40000, 50000]
+        self.fallback_cache = []
+        self._initialize_fallback_cache()
+
         # Copy over essential internal attributes from the underlying dataset
         for attr in ['_data', '_info', '_split', '_indices', '_fingerprint']:
             if hasattr(dataset, attr):
                 setattr(self, attr, getattr(dataset, attr))
     
+    def _initialize_fallback_cache(self):
+        """Pre-cache some known good images as fallbacks."""
+        print("🔄 Initializing fallback cache for error handling...")
+        for idx in self.fallback_indices:
+            try:
+                # Only cache up to available dataset size
+                if idx >= len(self.dataset):
+                    continue
+                item = self.dataset[idx]
+                if self.transform_fn:
+                    item = self.transform_fn(item)
+                self.fallback_cache.append(item)
+            except Exception as e:
+                # Skip bad fallback candidates
+                continue
+
+        if not self.fallback_cache:
+            # Emergency: try first 100 indices to find at least one good image
+            for idx in range(min(100, len(self.dataset))):
+                try:
+                    item = self.dataset[idx]
+                    if self.transform_fn:
+                        item = self.transform_fn(item)
+                    self.fallback_cache.append(item)
+                    break
+                except:
+                    continue
+
+        print(f"✅ Cached {len(self.fallback_cache)} fallback images")
+
+    def _get_fallback(self):
+        """Return a real cached image as fallback."""
+        if not self.fallback_cache:
+            # This should never happen if initialization worked
+            raise RuntimeError("No fallback images available - dataset may be corrupted")
+
+        # Rotate through cached images to provide variety
+        fallback_idx = self.skipped_count % len(self.fallback_cache)
+        return self.fallback_cache[fallback_idx]
+
     def __len__(self):
         return len(self.dataset)
-    
+
     def __getitem__(self, key):
         # Handle column access (string key) - delegate to underlying dataset
         if isinstance(key, str):
             return self.dataset[key]
-                
+
         # Handle row access (integer index) with error handling
         idx = key
         try:
             item = self.dataset[idx]
-            
+
             # Apply transform if provided
             if self.transform_fn:
                 item = self.transform_fn(item)
-            
+
             return item
-                
+
         except UnicodeDecodeError as e:
             self.skipped_count += 1
-            print(f"⚠️ UnicodeDecodeError error at index {idx}, trying next... (skipped: {self.skipped_count})")
-            
+            print(f"⚠️ UnicodeDecodeError at index {idx}, using cached fallback (skipped total: {self.skipped_count})")
+            return self._get_fallback()
+
         except Exception as e:
             self.skipped_count += 1
-            print(f"⚠️ Error at index {idx}: {e}, trying next... (skipped: {self.skipped_count})")
-    
-        return {
-            'pixel_values': torch.zeros(3, 224, 224),
-            'label': 0
-        }
+            print(f"⚠️ Error at index {idx}: {type(e).__name__}, using cached fallback (skipped total: {self.skipped_count})")
+            return self._get_fallback()
     
     def __getitems__(self, indices):
         """Handle batch loading for efficient DataLoader operation."""
@@ -179,19 +222,16 @@ class SafeImageNetDataset(Dataset):
         for idx in indices:
             try:
                 item = self.dataset[idx]
-                
+
                 # Apply transform if provided
                 if self.transform_fn:
                     item = self.transform_fn(item)
-                
+
                 batch.append(item)
             except Exception as e:
                 self.skipped_count += 1
-                print(f"⚠️ Error at index {idx}: {e}, using fallback... (skipped: {self.skipped_count})")
-                batch.append({
-                    'pixel_values': torch.zeros(3, 224, 224),
-                    'labels': 0
-                })
+                print(f"⚠️ Error at index {idx}: {type(e).__name__}, using cached fallback (skipped total: {self.skipped_count})")
+                batch.append(self._get_fallback())
         return batch
     
     def __getattr__(self, name):
