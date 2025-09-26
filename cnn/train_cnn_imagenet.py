@@ -576,7 +576,7 @@ def main():
                                         # This can speed up host-to-GPU transfer, especially for large batches.
         optim="adamw_torch",
         adam_beta1=0.9,
-        adam_beta2=0.99,  # Effective memory is less, so adjusts faster to spike in learning rate
+        adam_beta2=0.999,  # Changing from 0.99 to 0.999 to be less sensitive to variations in gradients
         adam_epsilon=1e-08,
         # AdamW optimizer details:
         # - Decouples weight decay from gradient-based updates (better than Adam for vision)
@@ -643,7 +643,7 @@ def main():
         # Momentum just adds inertia: keep μ of last velocity (useful when directions persist, otherwise it resists),
         # then take the same downhill step −η ∇f(θ_t).
 
-        max_grad_norm=10.0,
+        max_grad_norm=4, # training hovering around 3.5, originally had this to 10
         lr_scheduler_type="cosine_with_min_lr",  # Cosine annealing with minimum LR
         lr_scheduler_kwargs={
             "min_lr_rate": 0.10,  # Minimum LR as ratio of initial LR (% of initial)
@@ -752,7 +752,8 @@ def main():
             
             # Scheduler
             'scheduler/type': training_args.lr_scheduler_type,
-            'scheduler/min_lr': training_args.lr_scheduler_kwargs.get('min_lr', 0) if training_args.lr_scheduler_kwargs else 0,
+            # TODO: fix this, it's always logging 0
+            #'scheduler/min_lr_rate': training_args.lr_scheduler_kwargs.get('min_lr_rate', 0) if training_args.lr_scheduler_kwargs else 0,
             
             # Data augmentation
             'augmentation/cutmix_alpha': cutmix_alpha,
@@ -768,11 +769,12 @@ def main():
             'system/device': str(device),
         }
         
-        # Log hyperparameters as scalars (avoids creating separate hparams file)
+        # Log hyperparameters as scalars (only numeric values)
         for key, value in hparams.items():
-            writer.add_scalar(f'hparams/{key}', value, 0)
+            if isinstance(value, (int, float)) and not isinstance(value, bool):
+                writer.add_scalar(f'hparams/{key}', value, 0)
 
-        # Also log as text summary for easy viewing
+        # Log all hyperparameters as text summary for easy viewing
         import json
         hparams_text = json.dumps(hparams, indent=2)
         writer.add_text('hyperparameters', f'```json\n{hparams_text}\n```', 0)
