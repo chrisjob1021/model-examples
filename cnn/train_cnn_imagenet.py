@@ -489,8 +489,9 @@ def main():
     print(f"  Total parameters: {total_params:,}")
     print(f"  Trainable parameters: {trainable_params:,}")
     
-    batch_size_per_gpu = 1024
-    grad_accum = 1
+    batch_size_per_gpu = 512
+    grad_accum = 2              # effective batch size remains the same, but gradient averaged over steps
+                                # hoping this averages out noisy gradient mini-batches
     
     # Check if we want to resume from a checkpoint
     base_output_dir = f"./results/cnn_results_{'prelu' if use_prelu else 'relu'}"
