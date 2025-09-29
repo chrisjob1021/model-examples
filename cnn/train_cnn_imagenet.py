@@ -684,7 +684,8 @@ def main():
         # Momentum just adds inertia: keep μ of last velocity (useful when directions persist, otherwise it resists),
         # then take the same downhill step −η ∇f(θ_t).
 
-        max_grad_norm=4, # training hovering around 3.5, originally had this to 10
+        max_grad_norm=3,    # training hovering around 3.5, originally had this to 10
+                            # switched from 4 to 3 to protect further against outlier batches and/or grad spikes
         lr_scheduler_type="cosine_with_min_lr",  # Cosine annealing with minimum LR
         lr_scheduler_kwargs={
             "min_lr_rate": 0.10,  # Minimum LR as ratio of initial LR (% of initial)
@@ -757,7 +758,7 @@ def main():
         train_dataset=train_dataset,
         eval_dataset=eval_dataset,
         trainer_class=CNNTrainer,
-        #data_collator=cutmix_collator,  # Add CutMix collator for batch-level augmentation
+        data_collator=cutmix_collator,  # Add CutMix collator for batch-level augmentation
         resume_from_checkpoint=None,  # Don't resume trainer state - we loaded weights manually
     )
     

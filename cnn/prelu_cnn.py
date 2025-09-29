@@ -100,6 +100,93 @@ class ResidualBlock(nn.Module):
 
         return out
 
+class BottleneckBlock(nn.Module):
+    """Bottleneck residual block for ResNet-50/101/152.
+
+    Uses 1x1 -> 3x3 -> 1x1 convolutions to reduce parameters while increasing depth.
+    The first 1x1 reduces channels by 4x, 3x3 processes at lower dimension,
+    then final 1x1 expands back to the output dimension.
+
+    This is more efficient than basic blocks for deep networks:
+    - Basic block (256->256): 2 * (3*3*256*256) = 1.18M params
+    - Bottleneck (256->256): 1*1*256*64 + 3*3*64*64 + 1*1*64*256 = 70K params
+    """
+
+    # Expansion factor: output channels = planes * expansion
+    # This is ALWAYS 4 for standard ResNet bottleneck blocks.
+    expansion = 4
+
+    def __init__(self, in_channels, planes, stride=1, use_prelu=False, use_builtin_conv=False, prelu_channel_wise=True):
+        """
+        Args:
+            in_channels: Number of input channels
+            planes: Number of bottleneck (reduced) channels.
+                   Called "planes" because each channel is a 2D (H×W) feature map.
+                   The output will be planes * 4 channels.
+            stride: Stride for the 3x3 convolution
+            use_prelu: Whether to use PReLU instead of ReLU
+            use_builtin_conv: Whether to use PyTorch's built-in convolutions
+            prelu_channel_wise: Whether to use channel-wise PReLU parameters
+        """
+        super().__init__()
+
+        # Output channels = planes * 4 (the expansion factor)
+        out_channels = planes * self.expansion
+
+        # Bottleneck architecture: 1x1 reduce -> 3x3 process -> 1x1 expand
+        # Conv1: REDUCE channels from in_channels to planes
+        self.conv1 = ManualConv2d(in_channels, planes, kernel_size=1, stride=1, padding=0, use_builtin=use_builtin_conv)
+        self.bn1 = nn.BatchNorm2d(planes)
+
+        # Conv2: PROCESS at reduced dimension (planes to planes)
+        # Note: stride is applied here for spatial downsampling
+        self.conv2 = ManualConv2d(planes, planes, kernel_size=3, stride=stride, padding=1, use_builtin=use_builtin_conv)
+        self.bn2 = nn.BatchNorm2d(planes)
+
+        # Conv3: EXPAND from planes to out_channels (planes * 4)
+        self.conv3 = ManualConv2d(planes, out_channels, kernel_size=1, stride=1, padding=0, use_builtin=use_builtin_conv)
+        self.bn3 = nn.BatchNorm2d(out_channels)
+
+        # Activation functions
+        if use_prelu:
+            self.act1 = nn.PReLU(planes if prelu_channel_wise else 1)
+            self.act2 = nn.PReLU(planes if prelu_channel_wise else 1)
+            self.final_act = nn.PReLU(out_channels if prelu_channel_wise else 1)
+        else:
+            self.act1 = nn.ReLU(inplace=True)
+            self.act2 = nn.ReLU(inplace=True)
+            self.final_act = nn.ReLU(inplace=True)
+
+        # Shortcut connection
+        self.shortcut = nn.Sequential()
+        if stride != 1 or in_channels != out_channels:
+            # Use 1x1 conv to match dimensions
+            self.shortcut = nn.Sequential(
+                nn.Conv2d(in_channels, out_channels, kernel_size=1, stride=stride, bias=False),
+                nn.BatchNorm2d(out_channels)
+            )
+
+    def forward(self, x):
+        identity = x
+
+        # Bottleneck path
+        out = self.conv1(x)  # Reduce
+        out = self.bn1(out)
+        out = self.act1(out)
+
+        out = self.conv2(out)  # Process
+        out = self.bn2(out)
+        out = self.act2(out)
+
+        out = self.conv3(out)  # Expand
+        out = self.bn3(out)
+
+        # Add shortcut
+        out += self.shortcut(identity)
+        out = self.final_act(out)
+
+        return out
+
 # -------------------------------------------------------
 # Manual 2D convolution layer implemented with nested loops
 # -------------------------------------------------------
@@ -397,17 +484,17 @@ class CNN(nn.Module):
                 stacklevel=2
             )
         
-        # Spatial dimension flow through the network:
+        # Spatial dimension flow through the network (ResNet-50):
         # 1. Input: 224×224
         # 2. conv1 (7×7, stride=2, pad=3): (224 + 2*3 - 7)/2 + 1 = 112×112
         # 3. MaxPool (3×3, stride=3): (112 - 3)/3 + 1 = 37×37
-        # 4. conv2 first ResidualBlock (stride=2): (37 - 1)/2 + 1 = 19×19
-        # 5. conv2 remaining 2 blocks (stride=1): stays 19×19
-        # 6. conv3 first ResidualBlock (stride=2): (19 - 1)/2 + 1 = 10×10
-        # 7. conv3 remaining 3 blocks (stride=1): stay 10×10
-        # 8. conv4 first ResidualBlock (stride=2): (10 - 1)/2 + 1 = 5×5
-        # 9. conv4 remaining 5 blocks (stride=1): stay 5×5
-        # 10. conv5 all 3 blocks (stride=1): stay 5×5
+        # 4. conv2 all 3 blocks (stride=1): stays 37×37
+        # 5. conv3 first BottleneckBlock (stride=2): (37 - 1)/2 + 1 = 19×19
+        # 6. conv3 remaining 3 blocks (stride=1): stay 19×19
+        # 7. conv4 first BottleneckBlock (stride=2): (19 - 1)/2 + 1 = 10×10
+        # 8. conv4 remaining 5 blocks (stride=1): stay 10×10
+        # 9. conv5 first BottleneckBlock (stride=2): (10 - 1)/2 + 1 = 5×5
+        # 10. conv5 remaining 2 blocks (stride=1): stay 5×5
 
         # Layer 1: 7×7 conv, 64 filters, stride=2 (ImageNet input: 224×224)
         # We keep max pooling here (but replace it with stride=2 convs in later layers) because:
@@ -427,39 +514,56 @@ class CNN(nn.Module):
         #   Reference: "Striving for Simplicity: The All Convolutional Net" (2014)
         #   Shows stride=2 convs preserve more information than max pooling
 
-        # Following ResNet-34 architecture: [3, 4, 6, 3] blocks per stage
-        # Total layers: 1 (conv1) + 3×2 + 4×2 + 6×2 + 3×2 = 1 + 6 + 8 + 12 + 6 = 33 conv layers
+        # ResNet-50 architecture: [3, 4, 6, 3] blocks per stage with bottlenecks
+        # Total layers: 1 (conv1) + 3×3 + 4×3 + 6×3 + 3×3 = 1 + 9 + 12 + 18 + 9 = 49 conv layers
+        # (Plus 1 final FC = 50 total)
 
-        # conv2_x: 3 residual blocks, 128 channels
+        # conv2_x: 3 bottleneck blocks
+        # First block: 64 → 64 planes (256 output channels), stride=1 (no downsampling yet)
+        # Remaining blocks: 256 → 64 planes (256 output channels)
         self.conv2 = nn.Sequential(
-            *[ResidualBlock(64 if i == 0 else 128, 128, kernel_size=3, stride=2 if i == 0 else 1,
-                          use_prelu=use_prelu, use_builtin_conv=use_builtin_conv, prelu_channel_wise=prelu_channel_wise)
-              for i in range(3)]  # 37×37 → 19×19, then stays 19×19
+            BottleneckBlock(64, 64, stride=1,  # No stride here, already 37×37
+                          use_prelu=use_prelu, use_builtin_conv=use_builtin_conv, prelu_channel_wise=prelu_channel_wise),
+            *[BottleneckBlock(256, 64, stride=1,
+                            use_prelu=use_prelu, use_builtin_conv=use_builtin_conv, prelu_channel_wise=prelu_channel_wise)
+              for i in range(2)]  # Stays 37×37
         )
 
-        # conv3_x: 4 residual blocks, 256 channels
+        # conv3_x: 4 bottleneck blocks
+        # First block: 256 → 128 planes (512 output channels), stride=2 for downsampling
+        # Remaining blocks: 512 → 128 planes (512 output channels)
         self.conv3 = nn.Sequential(
-            *[ResidualBlock(128 if i == 0 else 256, 256, kernel_size=3, stride=2 if i == 0 else 1,
-                          use_prelu=use_prelu, use_builtin_conv=use_builtin_conv, prelu_channel_wise=prelu_channel_wise)
-              for i in range(4)]  # 19×19 → 10×10, then stays 10×10
+            BottleneckBlock(256, 128, stride=2,  # 37×37 → 19×19
+                          use_prelu=use_prelu, use_builtin_conv=use_builtin_conv, prelu_channel_wise=prelu_channel_wise),
+            *[BottleneckBlock(512, 128, stride=1,
+                            use_prelu=use_prelu, use_builtin_conv=use_builtin_conv, prelu_channel_wise=prelu_channel_wise)
+              for i in range(3)]  # Stays 19×19
         )
 
-        # conv4_x: 6 residual blocks, 512 channels
+        # conv4_x: 6 bottleneck blocks
+        # First block: 512 → 256 planes (1024 output channels), stride=2 for downsampling
+        # Remaining blocks: 1024 → 256 planes (1024 output channels)
         self.conv4 = nn.Sequential(
-            *[ResidualBlock(256 if i == 0 else 512, 512, kernel_size=3, stride=2 if i == 0 else 1,
-                          use_prelu=use_prelu, use_builtin_conv=use_builtin_conv, prelu_channel_wise=prelu_channel_wise)
-              for i in range(6)]  # 10×10 → 5×5, then stays 5×5
+            BottleneckBlock(512, 256, stride=2,  # 19×19 → 10×10
+                          use_prelu=use_prelu, use_builtin_conv=use_builtin_conv, prelu_channel_wise=prelu_channel_wise),
+            *[BottleneckBlock(1024, 256, stride=1,
+                            use_prelu=use_prelu, use_builtin_conv=use_builtin_conv, prelu_channel_wise=prelu_channel_wise)
+              for i in range(5)]  # Stays 10×10
         )
 
-        # conv5_x: 3 residual blocks, 512 channels (no stride reduction)
+        # conv5_x: 3 bottleneck blocks
+        # First block: 1024 → 512 planes (2048 output channels), stride=2 for downsampling
+        # Remaining blocks: 2048 → 512 planes (2048 output channels)
         self.conv5 = nn.Sequential(
-            *[ResidualBlock(512, 512, kernel_size=3, stride=1,
-                          use_prelu=use_prelu, use_builtin_conv=use_builtin_conv, prelu_channel_wise=prelu_channel_wise)
-              for i in range(3)]  # 5×5 → 5×5 (stays same size)
+            BottleneckBlock(1024, 512, stride=2,  # 10×10 → 5×5
+                          use_prelu=use_prelu, use_builtin_conv=use_builtin_conv, prelu_channel_wise=prelu_channel_wise),
+            *[BottleneckBlock(2048, 512, stride=1,
+                            use_prelu=use_prelu, use_builtin_conv=use_builtin_conv, prelu_channel_wise=prelu_channel_wise)
+              for i in range(2)]  # Stays 5×5
         )
         
         # Spatial Pyramid Pooling (as used in PReLU paper)
-        # Updated for 5×5 feature maps (was 10×10 before conv4/conv5, 11×11 with original)
+        # Updated for 5×5 feature maps from conv5
         #
         # With 5×5 feature maps, we use levels [5,2,1]:
         # - Level 5: 5×5 grid = entire feature map (25 bins)
@@ -467,24 +571,24 @@ class CNN(nn.Module):
         # - Level 1: 1×1 grid = global pooling (1 bin)
         #
         # Total bins: 5²+2²+1² = 25+4+1 = 30 bins per channel
-        # With 512 channels from conv5: 512 × 30 = 15,360 features fed to classifier
+        # With 2048 channels from conv5 (ResNet-50): 2048 × 30 = 61,440 features fed to classifier
         self.spp = nn.Sequential(
             SpatialPyramidPooling(levels=[5, 2, 1]),
             nn.Flatten(1),
         )
 
         self.classifier = nn.Sequential(
-            nn.Linear(512 * 30, 4096, bias=True),               # 15,360 → 4,096
+            nn.Linear(2048 * 30, 4096, bias=True),              # 61,440 → 4,096
             nn.PReLU(4096 if (use_prelu and prelu_channel_wise) else 1)
                 if use_prelu else nn.ReLU(inplace=True),
             nn.Dropout(0.5),                                    # ← after fc1 activation
 
-            nn.Linear(4096, 4096, bias=True),                   # 4 096 → 4 096
+            nn.Linear(4096, 4096, bias=True),                   # 4,096 → 4,096
             nn.PReLU(4096 if (use_prelu and prelu_channel_wise) else 1)
                 if use_prelu else nn.ReLU(inplace=True),
             nn.Dropout(0.5),                                    # ← after fc2 activation
 
-            nn.Linear(4096, num_classes)                        # 4 096 → 1 000 (or 10)
+            nn.Linear(4096, num_classes)                        # 4,096 → 1,000 (or 10)
         )
         
     def forward(self, x=None, pixel_values=None, **kwargs):
