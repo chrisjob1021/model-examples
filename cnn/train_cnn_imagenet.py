@@ -490,8 +490,9 @@ def main():
     print(f"  Trainable parameters: {trainable_params:,}")
     
     batch_size_per_gpu = 512
-    grad_accum = 2              # effective batch size remains the same, but gradient averaged over steps
-                                # hoping this averages out noisy gradient mini-batches
+    grad_accum = 4              # Increased accumulation for ResNet-101 stability
+                                # More accumulation steps = smoother gradients
+                                # Effective batch = 512 * 4 = 2048 (helps with deeper networks)
     
     # Check if we want to resume from a checkpoint
     base_output_dir = f"./results/cnn_results_{'prelu' if use_prelu else 'relu'}"
@@ -587,10 +588,12 @@ def main():
         warmup_ratio = 0.01  # Small 1% warmup for safety
         print(f"📈 Starting resumed training with LR={initial_lr}")
     else:
-        initial_lr = 2e-4   # Tried 0.1, 7e-4, good progress with 5e-4, even better progress with 3e-4
-                            # slow progress with 1e-4
-                            # okay progress with 2e-4, but slightly worse than 3e-4
-        warmup_ratio = 0.05  # Original 5% warmup for fresh training
+        initial_lr = 1e-4   # Reduced for ResNet-101 depth - deeper networks need lower LR
+                            # ResNet-50: 2e-4 to 3e-4 works well
+                            # ResNet-101: 1e-4 to 1.5e-4 for stability
+                            # The increased depth amplifies gradient flow issues
+        warmup_ratio = 0.1   # Increased warmup for deeper network (10% vs 5%)
+                            # Longer warmup helps stabilize early training
     
     # Create training arguments
     training_args = TrainingArguments(
@@ -599,10 +602,10 @@ def main():
         per_device_train_batch_size=batch_size_per_gpu,  # Reduced for stability
         per_device_eval_batch_size=batch_size_per_gpu,
         learning_rate=initial_lr,
-        weight_decay=5e-2,  # Tried 0.01, CNNs with AdamW: 5e-3 – 0.05 is common. Too high (>0.1) can flatten training
-                            # esp. in the cosine tail when weight decay dominates
-                            # TODO: think about raising this if network overfits with decreased learning rate
-                            #       compare eval to train loss
+        weight_decay=1e-2,  # Reduced for deeper network - ResNet-101 has more params
+                            # Higher weight decay with deeper networks can cause underfitting
+                            # Start conservative at 1e-2, can increase if overfitting occurs
+                            # Monitor train vs eval loss gap
         warmup_ratio=warmup_ratio,  # Dynamic warmup based on resume status
         gradient_accumulation_steps=grad_accum,
         eval_steps=1,
@@ -684,8 +687,9 @@ def main():
         # Momentum just adds inertia: keep μ of last velocity (useful when directions persist, otherwise it resists),
         # then take the same downhill step −η ∇f(θ_t).
 
-        max_grad_norm=3,    # training hovering around 3.5, originally had this to 10
-                            # switched from 4 to 3 to protect further against outlier batches and/or grad spikes
+        max_grad_norm=2,    # Reduced to 2 for ResNet-101 - tighter clipping for stability
+                            # Deeper networks can have larger gradient magnitudes
+                            # Aggressive clipping prevents the spikes you're seeing
         lr_scheduler_type="cosine_with_min_lr",  # Cosine annealing with minimum LR
         lr_scheduler_kwargs={
             "min_lr_rate": 0.10,  # Minimum LR as ratio of initial LR (% of initial)
