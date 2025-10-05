@@ -284,7 +284,14 @@ def main():
     randaugment_magnitude = 7
     random_erasing_prob = 0.1
     cutmix_alpha = 1.0
-    cutmix_prob = 0.5
+    cutmix_prob = 0.0  # Disabled - CutMix creates mixed labels (e.g., 60% cat + 40% dog) that make optimization harder
+                        # When training is already unstable (sharp minima), this compounds the problem
+                        #
+                        # Important distinction:
+                        # - Batch size noise = statistical sampling noise in gradient estimation (helps escape sharp minima)
+                        # - CutMix = deterministic augmentation that makes learning task harder (doesn't help with sharp minima)
+                        #
+                        # Re-enable (0.5) once we achieve stable training with flat minima
 
     # Define the data augmentation and preprocessing pipeline for training images
     # Augmentations are applied in order - each builds on the previous transformations
@@ -489,10 +496,21 @@ def main():
     print(f"  Total parameters: {total_params:,}")
     print(f"  Trainable parameters: {trainable_params:,}")
     
-    batch_size_per_gpu = 512
-    grad_accum = 4              # Increased accumulation for ResNet-101 stability
-                                # More accumulation steps = smoother gradients
-                                # Effective batch = 512 * 4 = 2048 (helps with deeper networks)
+    batch_size_per_gpu = 256
+    grad_accum = 4              # Gradient accumulation for stability
+                                # Effective batch = 256 * 4 = 1024
+
+                                # Why not larger batches (e.g., 2048)?
+                                # SHARP VS FLAT MINIMA:
+                                # - Large batches: compute accurate gradients → go straight downhill → find nearest steep valley (sharp minimum)
+                                # - Small batches: noisy gradients → bounce around → skip sharp valleys → settle in wide basins (flat minimum)
+                                #
+                                # Why sharp minima are bad:
+                                # 1. Generalization: Test data slightly differs from train data. In sharp minimum, small perturbations cause huge loss spikes
+                                # 2. Instability: Balanced on knife edge - any LR spike or gradient perturbation kicks you out → those loss spikes in TensorBoard
+                                # 3. Train/eval gap: Model memorized training data's path to sharp valley, but test data falls off the cliff
+                                #
+                                # Batch 1024 provides good balance: stable gradients + enough noise to find flat, generalizable minima
     
     # Check if we want to resume from a checkpoint
     base_output_dir = f"./results/cnn_results_{'prelu' if use_prelu else 'relu'}"
@@ -588,10 +606,12 @@ def main():
         warmup_ratio = 0.01  # Small 1% warmup for safety
         print(f"📈 Starting resumed training with LR={initial_lr}")
     else:
-        initial_lr = 1e-4   # Reduced for ResNet-101 depth - deeper networks need lower LR
-                            # ResNet-50: 2e-4 to 3e-4 works well
-                            # ResNet-101: 1e-4 to 1.5e-4 for stability
-                            # The increased depth amplifies gradient flow issues
+        initial_lr = 5e-5   # Reduced from 1e-4 to improve stability and avoid sharp minima
+                            # Lower LR means smaller steps → batch noise becomes more influential relative to gradient
+                            # This noise helps exploration: random walk skips over sharp valleys, settles in flat basins
+                            # High LR: gradient dominates → rushes into nearest (often sharp) minimum
+                            # Low LR: noise-to-signal ratio increases → better exploration → flatter, more stable minima
+                            # Trade-off: slower convergence, but better generalization and stability
         warmup_ratio = 0.1   # Increased warmup for deeper network (10% vs 5%)
                             # Longer warmup helps stabilize early training
     
@@ -602,10 +622,10 @@ def main():
         per_device_train_batch_size=batch_size_per_gpu,  # Reduced for stability
         per_device_eval_batch_size=batch_size_per_gpu,
         learning_rate=initial_lr,
-        weight_decay=1e-2,  # Reduced for deeper network - ResNet-101 has more params
-                            # Higher weight decay with deeper networks can cause underfitting
-                            # Start conservative at 1e-2, can increase if overfitting occurs
-                            # Monitor train vs eval loss gap
+        weight_decay=2e-2,  # Increased to combat overfitting (train/eval gap widening in TensorBoard)
+                            # Weight decay = L2 regularization, penalizes large weights
+                            # 2e-2 provides stronger regularization without being overly aggressive
+                            # Monitor: if underfitting appears (train loss stops decreasing), reduce back to 1e-2
         warmup_ratio=warmup_ratio,  # Dynamic warmup based on resume status
         gradient_accumulation_steps=grad_accum,
         eval_steps=1,
@@ -687,9 +707,10 @@ def main():
         # Momentum just adds inertia: keep μ of last velocity (useful when directions persist, otherwise it resists),
         # then take the same downhill step −η ∇f(θ_t).
 
-        max_grad_norm=2,    # Reduced to 2 for ResNet-101 - tighter clipping for stability
-                            # Deeper networks can have larger gradient magnitudes
-                            # Aggressive clipping prevents the spikes you're seeing
+        max_grad_norm=1.0,  # Tighter clipping to prevent gradient explosion
+                            # Clips gradient norm to max value of 1.0 (down from 2.0)
+                            # This prevents the wild loss spikes visible in TensorBoard
+                            # Trade-off: too tight (e.g., 0.1) slows convergence; 1.0 is good balance
         lr_scheduler_type="cosine_with_min_lr",  # Cosine annealing with minimum LR
         lr_scheduler_kwargs={
             "min_lr_rate": 0.10,  # Minimum LR as ratio of initial LR (% of initial)
