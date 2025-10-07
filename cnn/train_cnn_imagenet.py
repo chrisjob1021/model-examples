@@ -606,13 +606,13 @@ def main():
         warmup_ratio = 0.01  # Small 1% warmup for safety
         print(f"📈 Starting resumed training with LR={initial_lr}")
     else:
-        initial_lr = 5e-5   # Reduced from 1e-4 to improve stability and avoid sharp minima
+        initial_lr = 2e-4   # Reduced from 1e-4 to improve stability and avoid sharp minima
                             # Lower LR means smaller steps → batch noise becomes more influential relative to gradient
                             # This noise helps exploration: random walk skips over sharp valleys, settles in flat basins
                             # High LR: gradient dominates → rushes into nearest (often sharp) minimum
                             # Low LR: noise-to-signal ratio increases → better exploration → flatter, more stable minima
                             # Trade-off: slower convergence, but better generalization and stability
-        warmup_ratio = 0.1   # Increased warmup for deeper network (10% vs 5%)
+        warmup_ratio = 0.03   # Increased warmup for deeper network (10% vs 5%)
                             # Longer warmup helps stabilize early training
     
     # Create training arguments
@@ -622,7 +622,7 @@ def main():
         per_device_train_batch_size=batch_size_per_gpu,  # Reduced for stability
         per_device_eval_batch_size=batch_size_per_gpu,
         learning_rate=initial_lr,
-        weight_decay=2e-2,  # Increased to combat overfitting (train/eval gap widening in TensorBoard)
+        weight_decay=1e-2,  # Increased to combat overfitting (train/eval gap widening in TensorBoard)
                             # Weight decay = L2 regularization, penalizes large weights
                             # 2e-2 provides stronger regularization without being overly aggressive
                             # Monitor: if underfitting appears (train loss stops decreasing), reduce back to 1e-2
@@ -713,7 +713,7 @@ def main():
                             # Trade-off: too tight (e.g., 0.1) slows convergence; 1.0 is good balance
         lr_scheduler_type="cosine_with_min_lr",  # Cosine annealing with minimum LR
         lr_scheduler_kwargs={
-            "min_lr_rate": 0.10,  # Minimum LR as ratio of initial LR (% of initial)
+            "min_lr_rate": 0.20,  # Minimum LR as ratio of initial LR (% of initial)
             # Cosine annealing with min_lr:
             # - Learning rate follows a single cosine curve from initial_lr to min_lr
             # - min_lr = initial_lr * min_lr_ratio
