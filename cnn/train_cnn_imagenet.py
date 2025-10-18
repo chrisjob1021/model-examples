@@ -713,7 +713,7 @@ def main():
                             # Trade-off: too tight (e.g., 0.1) slows convergence; 1.0 is good balance
         lr_scheduler_type="cosine_with_min_lr",  # Cosine annealing with minimum LR
         lr_scheduler_kwargs={
-            "min_lr_rate": 0.20,  # Minimum LR as ratio of initial LR (% of initial)
+            "min_lr_rate": 0.30,  # Minimum LR as ratio of initial LR (% of initial)
             # Cosine annealing with min_lr:
             # - Learning rate follows a single cosine curve from initial_lr to min_lr
             # - min_lr = initial_lr * min_lr_ratio
