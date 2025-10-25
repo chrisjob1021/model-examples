@@ -259,10 +259,23 @@ def main():
     # Check CUDA availability
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
-    
+
+    # Check for mixed precision support
+    use_bf16 = False
+    use_fp16 = False
     if device.type == "cuda":
         print(f"GPU: {torch.cuda.get_device_name()}")
         print(f"GPU Memory: {torch.cuda.get_device_properties(0).total_memory / 1e9:.1f} GB")
+
+        # Check for BF16 support (Ampere and newer: A100, H100, RTX 30/40 series)
+        if torch.cuda.is_bf16_supported():
+            use_bf16 = True
+            print(f"✅ BF16 (bfloat16) support detected - enabling mixed precision training")
+        else:
+            # Fallback to FP16 for older GPUs (Volta, Turing: V100, T4, RTX 20 series)
+            use_fp16 = True
+            print(f"✅ FP16 (float16) support detected - enabling mixed precision training")
+            print(f"   (BF16 not available on this GPU, using FP16 fallback)")
     
     if False:
         # Load training dataset from processed version
@@ -316,7 +329,7 @@ def main():
         # Why: Applies 2 random ops from a set of 14 (rotation, shearing, color shifts, etc.)
         # magnitude=9 (out of 10) is aggressive - helps regularization but may slow initial convergence
         # This replaces manual tuning of individual augmentations
-        T.RandAugment(num_ops=randaugment_ops, magnitude=randaugment_magnitude),
+        T.RandAugment(num_ops=randaugment_ops, magnitude=randaugment_magnitude), # TODO: magnitude=7 is reasonable but slightly lower than the standard magnitude=9-10.
         
         # 5. TENSOR CONVERSION - PIL Image → Tensor, scales [0,255] → [0,1]
         # Must happen before normalize and after PIL-based augmentations
@@ -395,7 +408,8 @@ def main():
         # Why: Forces model to use context, prevents overfitting to specific features
         # p=0.1 (10% chance), scale=(0.02, 0.1) means 2-10% of image area erased
         # Applied AFTER normalization, so erased regions have random normalized values
-        T.RandomErasing(p=random_erasing_prob, scale=(0.02, 0.1)),
+        T.RandomErasing(p=random_erasing_prob, scale=(0.02, 0.1)), # TODO: this is very conserative, usually T.RandomErasing(p=0.5, scale=(0.02, 0.33))
+                                                                   # or more aggressive T.RandomErasing(p=0.6, scale=(0.02, 0.4))
     ])
 
     # Define the preprocessing pipeline for evaluation images (no heavy augmentation)
@@ -606,14 +620,16 @@ def main():
         warmup_ratio = 0.01  # Small 1% warmup for safety
         print(f"📈 Starting resumed training with LR={initial_lr}")
     else:
-        initial_lr = 1e-4   # Reduced from 1e-4 to improve stability and avoid sharp minima
-                            # Lower LR means smaller steps → batch noise becomes more influential relative to gradient
-                            # This noise helps exploration: random walk skips over sharp valleys, settles in flat basins
-                            # High LR: gradient dominates → rushes into nearest (often sharp) minimum
-                            # Low LR: noise-to-signal ratio increases → better exploration → flatter, more stable minima
-                            # Trade-off: slower convergence, but better generalization and stability
-        warmup_ratio = 0.1  # Increased warmup for deeper network (10% vs 5%)
-                            # Longer warmup helps stabilize early training
+        initial_lr = 1e-3   # Standard AdamW LR for vision models
+                            # This is the typical starting point for AdamW on ImageNet
+                            # With batch=1024, this provides good balance:
+                            # - Fast enough convergence for reasonable training time
+                            # - Stable with proper warmup (10%)
+                            # - Matches modern ImageNet training recipes
+                            # Previous value (1e-4) was overly conservative
+        warmup_ratio = 0.1  # 10% warmup for stability with higher learning rate
+                            # Longer warmup helps prevent early training instability
+                            # Critical when using higher LR like 1e-3
     
     # Create training arguments
     training_args = TrainingArguments(
@@ -622,10 +638,12 @@ def main():
         per_device_train_batch_size=batch_size_per_gpu,  # Reduced for stability
         per_device_eval_batch_size=batch_size_per_gpu,
         learning_rate=initial_lr,
-        weight_decay=2e-2,  # Increased to combat overfitting (train/eval gap widening in TensorBoard)
-                            # Weight decay = L2 regularization, penalizes large weights
-                            # 2e-2 provides stronger regularization without being overly aggressive
-                            # Monitor: if underfitting appears (train loss stops decreasing), reduce back to 1e-2
+        weight_decay=2e-3,  # Weight decay with WD/LR ratio of 2.0 (2e-3 / 1e-3 = 2.0)
+                            # This is a standard ratio for AdamW training on vision models
+                            # Typical range: 0.2 to 2.0 (we're at the higher end for more regularization)
+                            # Previous value (2e-2) was too aggressive relative to LR (ratio of 200!)
+                            # This balanced approach allows model to learn while maintaining regularization
+                            # L2 regularization penalizes large weights, improves generalization
         warmup_ratio=warmup_ratio,  # Dynamic warmup based on resume status
         gradient_accumulation_steps=grad_accum,
         eval_steps=1,
@@ -638,6 +656,13 @@ def main():
         dataloader_persistent_workers=False,
         dataloader_pin_memory=True,     # If True, the DataLoader will copy Tensors into CUDA pinned memory before returning them.
                                         # This can speed up host-to-GPU transfer, especially for large batches.
+
+        # Mixed precision training for 2-3x speedup and 50% memory reduction
+        # BF16 (bfloat16): More stable, no loss scaling needed, available on Ampere+ GPUs (A100, H100, RTX 30/40)
+        # FP16 (float16): Faster on older GPUs, requires loss scaling, available on Volta+ (V100, T4, RTX 20)
+        bf16=use_bf16,
+        fp16=use_fp16,
+
         optim="adamw_torch",
         adam_beta1=0.9,
         adam_beta2=0.999,  # Changing from 0.99 to 0.999 to be less sensitive to variations in gradients
@@ -711,6 +736,7 @@ def main():
                             # Clips gradient norm to max value of 1.0 (down from 2.0)
                             # This prevents the wild loss spikes visible in TensorBoard
                             # Trade-off: too tight (e.g., 0.1) slows convergence; 1.0 is good balance
+                            # TODO: adjust as needed for gradient instability with higher LR
         lr_scheduler_type="cosine_with_min_lr",  # Cosine annealing with minimum LR
         lr_scheduler_kwargs={
             "min_lr_rate": 0.30,  # Minimum LR as ratio of initial LR (% of initial)
@@ -733,15 +759,26 @@ def main():
         prediction_loss_only=False,
         label_names=["labels"], # need this to get eval_loss
         label_smoothing_factor=0.05,  # Label smoothing for regularization
+                                      # TODO: 0.05 is conservative, 0.1 is more standard
         report_to="tensorboard" if not disable_logging else "none",
     )
 
-    
+
     print(f"\n⚙️ Training Configuration:")
     print(f"  Epochs: {training_args.num_train_epochs}")
     print(f"  Batch size: {training_args.per_device_train_batch_size}")
+
+    # Show mixed precision status
+    if training_args.bf16:
+        print(f"  Mixed precision: BF16 (bfloat16) ✅")
+    elif training_args.fp16:
+        print(f"  Mixed precision: FP16 (float16) ✅")
+    else:
+        print(f"  Mixed precision: Disabled (FP32)")
+
     print(f"  Learning rate: {training_args.learning_rate}")
     print(f"  Weight decay: {training_args.weight_decay}")
+    print(f"  WD/LR ratio: {training_args.weight_decay / training_args.learning_rate:.1f}")
     print(f"  Warmup ratio: {training_args.warmup_ratio}")
     print(f"  LR scheduler: {training_args.lr_scheduler_type}")
     if training_args.lr_scheduler_kwargs:
@@ -806,10 +843,12 @@ def main():
             'training/effective_batch_size': training_args.per_device_train_batch_size * training_args.gradient_accumulation_steps,
             'training/learning_rate': training_args.learning_rate,
             'training/weight_decay': training_args.weight_decay,
+            'training/wd_lr_ratio': training_args.weight_decay / training_args.learning_rate,
             'training/warmup_ratio': training_args.warmup_ratio,
             'training/label_smoothing': training_args.label_smoothing_factor,
             'training/max_grad_norm': training_args.max_grad_norm,
             'training/seed': training_args.seed,
+            'training/mixed_precision': 'bf16' if training_args.bf16 else ('fp16' if training_args.fp16 else 'fp32'),
             
             # Optimizer
             'optimizer/type': training_args.optim,
