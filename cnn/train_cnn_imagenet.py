@@ -510,10 +510,8 @@ def main():
     print(f"  Total parameters: {total_params:,}")
     print(f"  Trainable parameters: {trainable_params:,}")
     
-    batch_size_per_gpu = 256
-    grad_accum = 4              # Gradient accumulation for stability
-                                # Effective batch = 256 * 4 = 1024
-
+    batch_size_per_gpu = 1024
+    grad_accum = 1             
                                 # Why not larger batches (e.g., 2048)?
                                 # SHARP VS FLAT MINIMA:
                                 # - Large batches: compute accurate gradients → go straight downhill → find nearest steep valley (sharp minimum)
