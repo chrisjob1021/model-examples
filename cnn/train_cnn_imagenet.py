@@ -849,7 +849,9 @@ def main():
             'training/max_grad_norm': training_args.max_grad_norm,
             'training/seed': training_args.seed,
             'training/mixed_precision': 'bf16' if training_args.bf16 else ('fp16' if training_args.fp16 else 'fp32'),
-            
+            'training/use_bf16': 1 if training_args.bf16 else 0,
+            'training/use_fp16': 1 if training_args.fp16 else 0,
+
             # Optimizer
             'optimizer/type': training_args.optim,
             'optimizer/adam_beta1': training_args.adam_beta1,
