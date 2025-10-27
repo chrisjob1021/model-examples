@@ -20,10 +20,10 @@ from torch.optim.lr_scheduler import _LRScheduler
 from typing import Optional
 
 class ConvAct(nn.Module):
-    def __init__(self, in_channels, out_channels, kernel_size, stride=1, padding=0, use_prelu=False, use_builtin_conv=False, prelu_channel_wise=True):
+    def __init__(self, in_channels, out_channels, kernel_size, stride=1, padding=0, use_prelu=False, use_builtin_conv=False, prelu_channel_wise=True, bn_momentum=0.1):
         super().__init__()
         self.conv = ManualConv2d(in_channels, out_channels, kernel_size=kernel_size, stride=stride, padding=padding, use_builtin=use_builtin_conv)
-        self.bn = nn.BatchNorm2d(out_channels)
+        self.bn = nn.BatchNorm2d(out_channels, momentum=bn_momentum)
 
         # Create appropriate activation function
         if use_prelu:
@@ -40,7 +40,7 @@ class ConvAct(nn.Module):
 
 class ResidualBlock(nn.Module):
     """Residual block with skip connection for better gradient flow"""
-    def __init__(self, in_channels, out_channels, kernel_size=3, stride=1, use_prelu=False, use_builtin_conv=False, prelu_channel_wise=True):
+    def __init__(self, in_channels, out_channels, kernel_size=3, stride=1, use_prelu=False, use_builtin_conv=False, prelu_channel_wise=True, bn_momentum=0.1):
         super().__init__()
         # Calculate padding to maintain spatial dimensions
         # Convolution output size formula:
@@ -67,9 +67,9 @@ class ResidualBlock(nn.Module):
 
         # Main convolution path
         self.conv1 = ConvAct(in_channels, out_channels, kernel_size, stride=stride, padding=padding,
-                             use_prelu=use_prelu, use_builtin_conv=use_builtin_conv, prelu_channel_wise=prelu_channel_wise)
+                             use_prelu=use_prelu, use_builtin_conv=use_builtin_conv, prelu_channel_wise=prelu_channel_wise, bn_momentum=bn_momentum)
         self.conv2 = ManualConv2d(out_channels, out_channels, kernel_size=kernel_size, stride=1, padding=padding, use_builtin=use_builtin_conv)
-        self.bn2 = nn.BatchNorm2d(out_channels)
+        self.bn2 = nn.BatchNorm2d(out_channels, momentum=bn_momentum)
 
         # Shortcut connection (identity or projection)
         self.shortcut = nn.Sequential()
@@ -77,7 +77,7 @@ class ResidualBlock(nn.Module):
             # 1x1 conv to match dimensions when needed
             self.shortcut = nn.Sequential(
                 nn.Conv2d(in_channels, out_channels, kernel_size=1, stride=stride, bias=False),
-                nn.BatchNorm2d(out_channels)
+                nn.BatchNorm2d(out_channels, momentum=bn_momentum)
             )
 
         # Final activation after addition
@@ -116,7 +116,7 @@ class BottleneckBlock(nn.Module):
     # This is ALWAYS 4 for standard ResNet bottleneck blocks.
     expansion = 4
 
-    def __init__(self, in_channels, planes, stride=1, use_prelu=False, use_builtin_conv=False, prelu_channel_wise=True):
+    def __init__(self, in_channels, planes, stride=1, use_prelu=False, use_builtin_conv=False, prelu_channel_wise=True, bn_momentum=0.1):
         """
         Args:
             in_channels: Number of input channels
@@ -127,6 +127,7 @@ class BottleneckBlock(nn.Module):
             use_prelu: Whether to use PReLU instead of ReLU
             use_builtin_conv: Whether to use PyTorch's built-in convolutions
             prelu_channel_wise: Whether to use channel-wise PReLU parameters
+            bn_momentum: Momentum for batch normalization
         """
         super().__init__()
 
@@ -136,16 +137,16 @@ class BottleneckBlock(nn.Module):
         # Bottleneck architecture: 1x1 reduce -> 3x3 process -> 1x1 expand
         # Conv1: REDUCE channels from in_channels to planes
         self.conv1 = ManualConv2d(in_channels, planes, kernel_size=1, stride=1, padding=0, use_builtin=use_builtin_conv)
-        self.bn1 = nn.BatchNorm2d(planes)
+        self.bn1 = nn.BatchNorm2d(planes, momentum=bn_momentum)
 
         # Conv2: PROCESS at reduced dimension (planes to planes)
         # Note: stride is applied here for spatial downsampling
         self.conv2 = ManualConv2d(planes, planes, kernel_size=3, stride=stride, padding=1, use_builtin=use_builtin_conv)
-        self.bn2 = nn.BatchNorm2d(planes)
+        self.bn2 = nn.BatchNorm2d(planes, momentum=bn_momentum)
 
         # Conv3: EXPAND from planes to out_channels (planes * 4)
         self.conv3 = ManualConv2d(planes, out_channels, kernel_size=1, stride=1, padding=0, use_builtin=use_builtin_conv)
-        self.bn3 = nn.BatchNorm2d(out_channels)
+        self.bn3 = nn.BatchNorm2d(out_channels, momentum=bn_momentum)
 
         # Activation functions
         if use_prelu:
@@ -163,7 +164,7 @@ class BottleneckBlock(nn.Module):
             # Use 1x1 conv to match dimensions
             self.shortcut = nn.Sequential(
                 nn.Conv2d(in_channels, out_channels, kernel_size=1, stride=stride, bias=False),
-                nn.BatchNorm2d(out_channels)
+                nn.BatchNorm2d(out_channels, momentum=bn_momentum)
             )
 
     def forward(self, x):
@@ -471,9 +472,10 @@ class CNN(nn.Module):
         Only used when use_prelu=True. Defaults to ``True``.
     """
 
-    def __init__(self, use_prelu: bool = False, *, use_builtin_conv: bool = True, prelu_channel_wise: bool = True, num_classes: int = 1000): 
+    def __init__(self, use_prelu: bool = False, *, use_builtin_conv: bool = True, prelu_channel_wise: bool = True, num_classes: int = 1000, bn_momentum: float = 0.1):
         super().__init__()
         self.num_classes = num_classes
+        self.bn_momentum = bn_momentum
         
         # Warn if using slow manual convolutions
         if not use_builtin_conv:
@@ -503,7 +505,7 @@ class CNN(nn.Module):
         # - Standard practice in ResNet, VGG, and the original PReLU paper
         # - Only deeper layers with complex features benefit from learned downsampling
         self.conv1 = nn.Sequential(
-            ConvAct(3, 64, kernel_size=7, stride=2, padding=3, use_prelu=use_prelu, use_builtin_conv=use_builtin_conv, prelu_channel_wise=prelu_channel_wise),  # 224×224 → 112×112
+            ConvAct(3, 64, kernel_size=7, stride=2, padding=3, use_prelu=use_prelu, use_builtin_conv=use_builtin_conv, prelu_channel_wise=prelu_channel_wise, bn_momentum=bn_momentum),  # 224×224 → 112×112
             ManualMaxPool2d(kernel_size=3, stride=3, padding=0, use_builtin=use_builtin_conv)  # 112×112 → 37×37
         )
 
@@ -523,9 +525,9 @@ class CNN(nn.Module):
         # Remaining blocks: 256 → 64 planes (256 output channels)
         self.conv2 = nn.Sequential(
             BottleneckBlock(64, 64, stride=1,  # No stride here, already 37×37
-                          use_prelu=use_prelu, use_builtin_conv=use_builtin_conv, prelu_channel_wise=prelu_channel_wise),
+                          use_prelu=use_prelu, use_builtin_conv=use_builtin_conv, prelu_channel_wise=prelu_channel_wise, bn_momentum=bn_momentum),
             *[BottleneckBlock(256, 64, stride=1,
-                            use_prelu=use_prelu, use_builtin_conv=use_builtin_conv, prelu_channel_wise=prelu_channel_wise)
+                            use_prelu=use_prelu, use_builtin_conv=use_builtin_conv, prelu_channel_wise=prelu_channel_wise, bn_momentum=bn_momentum)
               for i in range(2)]  # Stays 37×37
         )
 
@@ -534,9 +536,9 @@ class CNN(nn.Module):
         # Remaining blocks: 512 → 128 planes (512 output channels)
         self.conv3 = nn.Sequential(
             BottleneckBlock(256, 128, stride=2,  # 37×37 → 19×19
-                          use_prelu=use_prelu, use_builtin_conv=use_builtin_conv, prelu_channel_wise=prelu_channel_wise),
+                          use_prelu=use_prelu, use_builtin_conv=use_builtin_conv, prelu_channel_wise=prelu_channel_wise, bn_momentum=bn_momentum),
             *[BottleneckBlock(512, 128, stride=1,
-                            use_prelu=use_prelu, use_builtin_conv=use_builtin_conv, prelu_channel_wise=prelu_channel_wise)
+                            use_prelu=use_prelu, use_builtin_conv=use_builtin_conv, prelu_channel_wise=prelu_channel_wise, bn_momentum=bn_momentum)
               for i in range(3)]  # Stays 19×19
         )
 
@@ -545,9 +547,9 @@ class CNN(nn.Module):
         # Remaining blocks: 1024 → 256 planes (1024 output channels)
         self.conv4 = nn.Sequential(
             BottleneckBlock(512, 256, stride=2,  # 19×19 → 10×10
-                          use_prelu=use_prelu, use_builtin_conv=use_builtin_conv, prelu_channel_wise=prelu_channel_wise),
+                          use_prelu=use_prelu, use_builtin_conv=use_builtin_conv, prelu_channel_wise=prelu_channel_wise, bn_momentum=bn_momentum),
             *[BottleneckBlock(1024, 256, stride=1,
-                            use_prelu=use_prelu, use_builtin_conv=use_builtin_conv, prelu_channel_wise=prelu_channel_wise)
+                            use_prelu=use_prelu, use_builtin_conv=use_builtin_conv, prelu_channel_wise=prelu_channel_wise, bn_momentum=bn_momentum)
               for i in range(5)]  # Stays 10×10
         )
 
@@ -556,9 +558,9 @@ class CNN(nn.Module):
         # Remaining blocks: 2048 → 512 planes (2048 output channels)
         self.conv5 = nn.Sequential(
             BottleneckBlock(1024, 512, stride=2,  # 10×10 → 5×5
-                          use_prelu=use_prelu, use_builtin_conv=use_builtin_conv, prelu_channel_wise=prelu_channel_wise),
+                          use_prelu=use_prelu, use_builtin_conv=use_builtin_conv, prelu_channel_wise=prelu_channel_wise, bn_momentum=bn_momentum),
             *[BottleneckBlock(2048, 512, stride=1,
-                            use_prelu=use_prelu, use_builtin_conv=use_builtin_conv, prelu_channel_wise=prelu_channel_wise)
+                            use_prelu=use_prelu, use_builtin_conv=use_builtin_conv, prelu_channel_wise=prelu_channel_wise, bn_momentum=bn_momentum)
               for i in range(2)]  # Stays 5×5
         )
         

@@ -260,10 +260,13 @@ def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
 
+    # Global flag to disable mixed precision training
+    use_mixed_precision = False
+
     # Check for mixed precision support
     use_bf16 = False
     use_fp16 = False
-    if device.type == "cuda":
+    if use_mixed_precision and device.type == "cuda":
         print(f"GPU: {torch.cuda.get_device_name()}")
         print(f"GPU Memory: {torch.cuda.get_device_properties(0).total_memory / 1e9:.1f} GB")
 
@@ -276,6 +279,10 @@ def main():
             use_fp16 = True
             print(f"✅ FP16 (float16) support detected - enabling mixed precision training")
             print(f"   (BF16 not available on this GPU, using FP16 fallback)")
+    elif device.type == "cuda":
+        print(f"GPU: {torch.cuda.get_device_name()}")
+        print(f"GPU Memory: {torch.cuda.get_device_properties(0).total_memory / 1e9:.1f} GB")
+        print(f"⚠️ Mixed precision training disabled (use_mixed_precision=False)")
     
     if False:
         # Load training dataset from processed version
@@ -463,16 +470,19 @@ def main():
     print(f"✅ Training samples: {len(train_dataset):,}")
     print(f"✅ Validation samples: {len(eval_dataset):,}")
     
-    use_prelu = True
+    use_prelu = False
     
     # Create CNN model
     activation_type = "PReLU" if use_prelu else "ReLU"
+    bn_momentum = 0.01  # Batch normalization momentum (lower = more stable running stats)
     print(f"\n🏗️ Creating {activation_type} CNN model ({1000} classes)...")
     print(f"🔧 Activation function: {activation_type}")
+    print(f"🔧 BatchNorm momentum: {bn_momentum}")
     model = CNN(
         use_prelu=use_prelu,
         use_builtin_conv=True,  # Use fast PyTorch convolutions
-        num_classes=1000
+        num_classes=1000,
+        bn_momentum=bn_momentum
     )
     
     # This section moved below after we determine resume status
@@ -730,10 +740,10 @@ def main():
         # Momentum just adds inertia: keep μ of last velocity (useful when directions persist, otherwise it resists),
         # then take the same downhill step −η ∇f(θ_t).
 
-        max_grad_norm=1.0,  # Tighter clipping to prevent gradient explosion
-                            # Clips gradient norm to max value of 1.0 (down from 2.0)
+        max_grad_norm=0.5,  # Tighter clipping to prevent gradient explosion
+                            # Clips gradient norm to max value of 0.5 (reduced from 1.0)
                             # This prevents the wild loss spikes visible in TensorBoard
-                            # Trade-off: too tight (e.g., 0.1) slows convergence; 1.0 is good balance
+                            # Trade-off: too tight (e.g., 0.1) slows convergence; 0.5 provides more stability
                             # TODO: adjust as needed for gradient instability with higher LR
         lr_scheduler_type="cosine_with_min_lr",  # Cosine annealing with minimum LR
         lr_scheduler_kwargs={
@@ -833,7 +843,8 @@ def main():
             'model/num_classes': 1000,
             'model/total_params': total_params,
             'model/trainable_params': trainable_params,
-            
+            'model/bn_momentum': bn_momentum,
+
             # Training configuration
             'training/epochs': training_args.num_train_epochs,
             'training/batch_size_per_gpu': training_args.per_device_train_batch_size,
@@ -855,19 +866,19 @@ def main():
             'optimizer/adam_beta1': training_args.adam_beta1,
             'optimizer/adam_beta2': training_args.adam_beta2,
             'optimizer/adam_epsilon': training_args.adam_epsilon,
-            
+
             # Scheduler
             'scheduler/type': training_args.lr_scheduler_type,
             # TODO: fix this, it's always logging 0
             #'scheduler/min_lr_rate': training_args.lr_scheduler_kwargs.get('min_lr_rate', 0) if training_args.lr_scheduler_kwargs else 0,
-            
+
             # Data augmentation
             'augmentation/cutmix_alpha': cutmix_alpha,
             'augmentation/cutmix_prob': cutmix_prob,
             'augmentation/randaugment_ops': randaugment_ops,
             'augmentation/randaugment_magnitude': randaugment_magnitude,
             'augmentation/random_erasing_prob': random_erasing_prob,
-            
+
             # System
             'system/num_workers': training_args.dataloader_num_workers,
             'system/pin_memory': training_args.dataloader_pin_memory,
