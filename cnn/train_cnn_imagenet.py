@@ -260,6 +260,32 @@ def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
 
+    # L40S/Ada GPU-specific settings for numerical stability
+    # TODO: Configuring L40S-specific settings to address gradient instability
+    # TF32 is enabled by default on Ampere/Ada (A100, H100, L40S, RTX 30/40)
+    # It uses reduced precision (10-bit mantissa vs 23-bit FP32) which can cause
+    # numerical instability in BatchNorm and gradient computations
+    if device.type == "cuda":
+        # Print GPU architecture info for debugging
+        print(f"GPU: {torch.cuda.get_device_name()}")
+        print(f"CUDA version: {torch.version.cuda}")
+        print(f"cuDNN version: {torch.backends.cudnn.version()}")
+
+        # Disable TF32 (reduced precision tensor operations)
+        torch.backends.cuda.matmul.allow_tf32 = False
+        torch.backends.cudnn.allow_tf32 = False
+
+        # Force deterministic algorithms (critical for numerical stability on newer GPUs)
+        torch.backends.cudnn.benchmark = False
+        torch.backends.cudnn.deterministic = True
+
+        # Prevent reduced precision reductions in FP32 mode
+        torch.backends.cuda.matmul.allow_fp16_reduced_precision_reduction = False
+
+        print(f"🔧 TF32 disabled for numerical stability")
+        print(f"🔧 cuDNN deterministic mode enabled")
+        print(f"🔧 Forced full FP32 precision for all operations")
+
     # Global flag to disable mixed precision training
     use_mixed_precision = False
 
@@ -520,8 +546,8 @@ def main():
     print(f"  Total parameters: {total_params:,}")
     print(f"  Trainable parameters: {trainable_params:,}")
     
-    batch_size_per_gpu = 1024
-    grad_accum = 1             
+    batch_size_per_gpu = 512
+    grad_accum = 2          
                                 # Why not larger batches (e.g., 2048)?
                                 # SHARP VS FLAT MINIMA:
                                 # - Large batches: compute accurate gradients → go straight downhill → find nearest steep valley (sharp minimum)
@@ -661,7 +687,7 @@ def main():
         logging_dir="./logs/logs" if not disable_logging else None,
         remove_unused_columns=False, # Fix for custom dataset format
         dataloader_num_workers=16,      # Parallel data loading
-        dataloader_persistent_workers=False,
+        dataloader_persistent_workers=True, # Enabled for L40S - keeps workers alive, reduces PCIe overhead on non-NVLink GPUs
         dataloader_pin_memory=True,     # If True, the DataLoader will copy Tensors into CUDA pinned memory before returning them.
                                         # This can speed up host-to-GPU transfer, especially for large batches.
 
