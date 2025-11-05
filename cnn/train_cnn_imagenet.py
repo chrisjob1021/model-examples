@@ -500,7 +500,7 @@ def main():
     
     # Create CNN model
     activation_type = "PReLU" if use_prelu else "ReLU"
-    bn_momentum = 0.01  # Batch normalization momentum (lower = more stable running stats)
+    bn_momentum = 0.1  # Batch normalization momentum (lower = more stable running stats)
                         # TODO: adjusting this value between 0.01 and 0.1 (default) to avoid invalid batch norm stats
     print(f"\n🏗️ Creating {activation_type} CNN model ({1000} classes)...")
     print(f"🔧 Activation function: {activation_type}")
