@@ -848,7 +848,12 @@ def main():
     
     # Create trainer using ModelTrainer
     print(f"\n🏋️ Setting up trainer...")
-    
+
+    # Set up error log path for gradient anomaly tracking
+    import os
+    error_log_path = os.path.join(output_dir, "gradient_anomalies.log")
+    print(f"📝 Gradient anomaly log: {error_log_path}")
+
     trainer = ModelTrainer(
         model=model,
         training_args=training_args,
@@ -857,6 +862,7 @@ def main():
         trainer_class=CNNTrainer,
         data_collator=cutmix_collator,  # Add CutMix collator for batch-level augmentation
         resume_from_checkpoint=None,  # Don't resume trainer state - we loaded weights manually
+        error_log_path=error_log_path,  # Pass error log path for gradient anomaly tracking
     )
     
     # Log hyperparameters to TensorBoard

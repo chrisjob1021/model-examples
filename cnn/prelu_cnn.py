@@ -950,7 +950,35 @@ def get_cosine_with_hard_restarts_decay_schedule_with_warmup(
 # Custom Trainer for CNN
 # -------------------------------------------------------
 class CNNTrainer(Trainer):
-    """Custom trainer for CNN models."""
+    """Custom trainer for CNN models with gradient anomaly logging."""
+
+    def __init__(self, *args, error_log_path="gradient_anomalies.log", **kwargs):
+        super().__init__(*args, **kwargs)
+        self.error_log_path = error_log_path
+        self.grad_norm_threshold = 7.0  # Log when grad norm exceeds this
+        self.last_loss = None
+
+        # Initialize error log file
+        import os
+        os.makedirs(os.path.dirname(error_log_path) if os.path.dirname(error_log_path) else ".", exist_ok=True)
+        with open(error_log_path, 'w') as f:
+            f.write("=" * 100 + "\n")
+            f.write("GRADIENT ANOMALY LOG\n")
+            f.write("=" * 100 + "\n\n")
+
+    def _log_anomaly(self, step, message, details=None):
+        """Log anomaly to error log file."""
+        import datetime
+        timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+        with open(self.error_log_path, 'a') as f:
+            f.write(f"\n{'='*100}\n")
+            f.write(f"[{timestamp}] Step {step}: {message}\n")
+            f.write(f"{'='*100}\n")
+            if details:
+                for key, value in details.items():
+                    f.write(f"  {key}: {value}\n")
+            f.write("\n")
 
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
         pixel_values = inputs["pixel_values"]
@@ -978,15 +1006,78 @@ class CNNTrainer(Trainer):
         pixel_values = pixel_values.to(model_device)
         labels = labels.to(model_device)
 
+        # Check for input anomalies (both training and eval)
+        mode = "training" if model.training else "evaluation"
+        if torch.isnan(pixel_values).any():
+            self._log_anomaly(
+                self.state.global_step,
+                f"NaN detected in input pixel_values ({mode})",
+                {"batch_shape": str(pixel_values.shape)}
+            )
+        if torch.isinf(pixel_values).any():
+            self._log_anomaly(
+                self.state.global_step,
+                f"Inf detected in input pixel_values ({mode})",
+                {"batch_shape": str(pixel_values.shape)}
+            )
+
         outputs = model(pixel_values)
-        
+
+        # Check for output anomalies (both training and eval)
+        if torch.isnan(outputs).any():
+            self._log_anomaly(
+                self.state.global_step,
+                f"NaN detected in model outputs ({mode})",
+                {"output_shape": str(outputs.shape)}
+            )
+        if torch.isinf(outputs).any():
+            self._log_anomaly(
+                self.state.global_step,
+                f"Inf detected in model outputs ({mode})",
+                {"output_shape": str(outputs.shape)}
+            )
+
         # Use label smoothing from training args if available, otherwise default to 0.0
         label_smoothing = 0.0
         if hasattr(self, 'args') and hasattr(self.args, 'label_smoothing_factor'):
             label_smoothing = self.args.label_smoothing_factor
-        
+
         loss_fn = nn.CrossEntropyLoss(label_smoothing=label_smoothing)
         loss = loss_fn(outputs, labels)
+
+        # Check for loss anomalies (both training and eval)
+        if torch.isnan(loss):
+            self._log_anomaly(
+                self.state.global_step,
+                f"NaN loss detected ({mode})",
+                {"loss_value": "NaN"}
+            )
+        elif torch.isinf(loss):
+            self._log_anomaly(
+                self.state.global_step,
+                f"Inf loss detected ({mode})",
+                {"loss_value": "Inf"}
+            )
+        elif loss.item() > 100.0:
+            self._log_anomaly(
+                self.state.global_step,
+                f"Abnormally large loss detected ({mode})",
+                {"loss_value": f"{loss.item():.4f}"}
+            )
+
+        # Check for sudden loss spikes (training only since eval doesn't update sequentially)
+        if model.training:
+            if self.last_loss is not None and loss.item() > self.last_loss * 10:
+                self._log_anomaly(
+                    self.state.global_step,
+                    "Loss spike detected (>10x increase)",
+                    {
+                        "previous_loss": f"{self.last_loss:.4f}",
+                        "current_loss": f"{loss.item():.4f}",
+                        "ratio": f"{loss.item() / self.last_loss:.2f}x"
+                    }
+                )
+            self.last_loss = loss.item()
         
         # Fix for HuggingFace Trainer gradient accumulation scaling bug
         # Trainer scales logged loss by gradient_accumulation_steps, but actual training uses unscaled loss
@@ -1038,3 +1129,184 @@ class CNNTrainer(Trainer):
             return self.lr_scheduler
 
         return super().create_scheduler(num_training_steps, optimizer)
+
+    def training_step(self, model, inputs, num_items_in_batch=None):
+        """Override training_step to add gradient monitoring."""
+        loss = super().training_step(model, inputs, num_items_in_batch)
+
+        # After backward pass, check gradients and batch norm stats
+        if model.training and self.state.global_step % self.args.logging_steps == 0:
+            self._check_gradients(model)
+            self._check_batchnorm_stats(model, mode="training")
+
+        return loss
+
+    def evaluate(self, eval_dataset=None, ignore_keys=None, metric_key_prefix="eval"):
+        """Override evaluate to check batch norm stats after evaluation."""
+        # Run normal evaluation
+        output = super().evaluate(eval_dataset, ignore_keys, metric_key_prefix)
+
+        # Check batch norm stats after evaluation completes (once per epoch)
+        self._check_batchnorm_stats(self.model, mode="evaluation")
+
+        return output
+
+    def _check_gradients(self, model):
+        """Check for gradient anomalies and log them."""
+        step = self.state.global_step
+        total_norm = 0.0
+        nan_params = []
+        inf_params = []
+        large_grad_params = []
+        layer_norms = {}
+
+        for name, param in model.named_parameters():
+            if param.grad is not None:
+                # Check for NaN gradients
+                if torch.isnan(param.grad).any():
+                    nan_params.append(name)
+
+                # Check for Inf gradients
+                if torch.isinf(param.grad).any():
+                    inf_params.append(name)
+
+                # Compute per-parameter gradient norm
+                param_norm = param.grad.data.norm(2).item()
+                total_norm += param_norm ** 2
+
+                # Track per-layer norms (group by layer name prefix)
+                layer_name = '.'.join(name.split('.')[:2])  # e.g., "conv1.conv"
+                if layer_name not in layer_norms:
+                    layer_norms[layer_name] = 0.0
+                layer_norms[layer_name] += param_norm ** 2
+
+                # Check for abnormally large gradients in individual parameters
+                if param_norm > 100.0:
+                    large_grad_params.append((name, param_norm))
+
+        total_norm = total_norm ** 0.5
+
+        # Compute per-layer norms
+        for layer_name in layer_norms:
+            layer_norms[layer_name] = layer_norms[layer_name] ** 0.5
+
+        # Log anomalies
+        if nan_params:
+            self._log_anomaly(
+                step,
+                f"NaN gradients detected in {len(nan_params)} parameters",
+                {"parameters": ", ".join(nan_params[:10])}  # Log first 10
+            )
+
+        if inf_params:
+            self._log_anomaly(
+                step,
+                f"Inf gradients detected in {len(inf_params)} parameters",
+                {"parameters": ", ".join(inf_params[:10])}
+            )
+
+        if total_norm > self.grad_norm_threshold:
+            # Find layers with largest gradients
+            top_layers = sorted(layer_norms.items(), key=lambda x: x[1], reverse=True)[:5]
+
+            details = {
+                "total_grad_norm": f"{total_norm:.4f}",
+                "threshold": f"{self.grad_norm_threshold:.4f}",
+                "learning_rate": f"{self.optimizer.param_groups[0]['lr']:.2e}",
+            }
+
+            # Add top layers
+            for i, (layer_name, norm) in enumerate(top_layers, 1):
+                details[f"top_{i}_layer"] = f"{layer_name} (norm: {norm:.4f})"
+
+            self._log_anomaly(
+                step,
+                f"Large gradient norm detected: {total_norm:.4f}",
+                details
+            )
+
+        if large_grad_params:
+            top_params = sorted(large_grad_params, key=lambda x: x[1], reverse=True)[:5]
+            details = {}
+            for i, (param_name, norm) in enumerate(top_params, 1):
+                details[f"param_{i}"] = f"{param_name} (norm: {norm:.4f})"
+
+            self._log_anomaly(
+                step,
+                f"Large gradients in {len(large_grad_params)} individual parameters",
+                details
+            )
+
+    def _check_batchnorm_stats(self, model, mode="training"):
+        """Check BatchNorm layers for statistical anomalies.
+
+        Args:
+            model: The model to check
+            mode: "training" or "evaluation" for logging context
+        """
+        step = self.state.global_step
+        bad_bn_layers = []
+
+        for name, module in model.named_modules():
+            if isinstance(module, nn.BatchNorm2d):
+                issues = []
+
+                # Check running_mean
+                if hasattr(module, 'running_mean') and module.running_mean is not None:
+                    if torch.isnan(module.running_mean).any():
+                        issues.append("running_mean has NaN")
+                    elif torch.isinf(module.running_mean).any():
+                        issues.append("running_mean has Inf")
+                    else:
+                        mean_abs = module.running_mean.abs().mean().item()
+                        if mean_abs > 10.0:
+                            issues.append(f"running_mean abnormally large (avg abs: {mean_abs:.2f})")
+
+                # Check running_var
+                if hasattr(module, 'running_var') and module.running_var is not None:
+                    if torch.isnan(module.running_var).any():
+                        issues.append("running_var has NaN")
+                    elif torch.isinf(module.running_var).any():
+                        issues.append("running_var has Inf")
+                    elif (module.running_var <= 0).any():
+                        issues.append("running_var has non-positive values")
+                    else:
+                        var_mean = module.running_var.mean().item()
+                        var_max = module.running_var.max().item()
+                        if var_mean > 100.0:
+                            issues.append(f"running_var abnormally large (avg: {var_mean:.2f})")
+                        if var_max > 1000.0:
+                            issues.append(f"running_var max too large ({var_max:.2f})")
+                        if var_mean < 0.01:
+                            issues.append(f"running_var abnormally small (avg: {var_mean:.6f})")
+
+                # Check weight and bias (gamma and beta parameters)
+                if hasattr(module, 'weight') and module.weight is not None:
+                    if torch.isnan(module.weight).any():
+                        issues.append("weight has NaN")
+                    elif torch.isinf(module.weight).any():
+                        issues.append("weight has Inf")
+
+                if hasattr(module, 'bias') and module.bias is not None:
+                    if torch.isnan(module.bias).any():
+                        issues.append("bias has NaN")
+                    elif torch.isinf(module.bias).any():
+                        issues.append("bias has Inf")
+
+                if issues:
+                    bad_bn_layers.append((name, issues))
+
+        # Log all bad batch norm layers
+        if bad_bn_layers:
+            for layer_name, issues in bad_bn_layers:
+                details = {
+                    "layer": layer_name,
+                    "mode": mode,
+                    "issues": ", ".join(issues),
+                    "num_issues": len(issues)
+                }
+                self._log_anomaly(
+                    step,
+                    f"BatchNorm anomaly detected in {layer_name} ({mode})",
+                    details
+                )
