@@ -496,11 +496,12 @@ def main():
     print(f"✅ Training samples: {len(train_dataset):,}")
     print(f"✅ Validation samples: {len(eval_dataset):,}")
     
-    use_prelu = True
+    use_prelu = False # TODO: experimenting with disabling PReLU to improve training stability
     
     # Create CNN model
     activation_type = "PReLU" if use_prelu else "ReLU"
     bn_momentum = 0.01  # Batch normalization momentum (lower = more stable running stats)
+                        # TODO: adjusting this value between 0.01 and 0.1 (default) to avoid invalid batch norm stats
     print(f"\n🏗️ Creating {activation_type} CNN model ({1000} classes)...")
     print(f"🔧 Activation function: {activation_type}")
     print(f"🔧 BatchNorm momentum: {bn_momentum}")
