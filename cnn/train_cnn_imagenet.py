@@ -688,7 +688,7 @@ def main():
         remove_unused_columns=False, # Fix for custom dataset format
         dataloader_num_workers=16,      # Parallel data loading
         dataloader_persistent_workers=False,    # Enabled for L40S - keeps workers alive, reduces PCIe overhead on non-NVLink GPUs
-                                                # TODO: investigating here, but it looks we were getting oom-killed leaving these alive on a 128GB mem system
+                                                # IMPORTANT: it looks we were getting oom-killed leaving these alive on a 128GB mem system
         dataloader_pin_memory=True,     # If True, the DataLoader will copy Tensors into CUDA pinned memory before returning them.
                                         # This can speed up host-to-GPU transfer, especially for large batches.
 
@@ -862,7 +862,7 @@ def main():
         trainer_class=CNNTrainer,
         data_collator=cutmix_collator,  # Add CutMix collator for batch-level augmentation
         resume_from_checkpoint=None,  # Don't resume trainer state - we loaded weights manually
-        error_log_path=error_log_path,  # Pass error log path for gradient anomaly tracking
+        trainer_kwargs={"error_log_path": error_log_path},  # Pass error log path for gradient anomaly tracking
     )
     
     # Log hyperparameters to TensorBoard

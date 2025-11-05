@@ -22,6 +22,7 @@ class ModelTrainer:
         callbacks=None,
         resume_from_checkpoint=None,
         disable_timestamped_logging=False,
+        trainer_kwargs=None,
     ):
         """
         Initializes the ModelTrainer.
@@ -39,6 +40,7 @@ class ModelTrainer:
             callbacks (list, optional): List of callbacks for the trainer. Defaults to None.
             resume_from_checkpoint (str, optional): Path to checkpoint to resume from. Defaults to None.
             disable_timestamped_logging (bool, optional): If True, disables automatic timestamped logging directories. Defaults to False.
+            trainer_kwargs (dict, optional): Additional keyword arguments to pass to the trainer class constructor. Defaults to None.
         """
         self.model = model
         self.training_args = training_args
@@ -52,6 +54,7 @@ class ModelTrainer:
         self.callbacks = callbacks
         self.resume_from_checkpoint = resume_from_checkpoint
         self.disable_timestamped_logging = disable_timestamped_logging
+        self.trainer_kwargs = trainer_kwargs or {}
 
         # Add timestamp to logging_dir to prevent overwriting logs (unless disabled)
         if self.training_args.logging_dir and not disable_timestamped_logging:
@@ -75,6 +78,7 @@ class ModelTrainer:
                 data_collator=self.data_collator,
                 compute_metrics=self.compute_metrics,
                 callbacks=self.callbacks,
+                **self.trainer_kwargs,
             )
 
         print("Starting training...")
@@ -96,6 +100,7 @@ class ModelTrainer:
                 data_collator=self.data_collator,
                 compute_metrics=self.compute_metrics,
                 callbacks=self.callbacks,
+                **self.trainer_kwargs,
             )
 
         print("Evaluating model...")
