@@ -958,6 +958,18 @@ class CNNTrainer(Trainer):
         self.grad_norm_threshold = 7.0  # Log when grad norm exceeds this
         self.last_loss = None
 
+        # For tracking activation magnitudes
+        self.activation_stats = {}
+        self.activation_hooks_installed = False
+
+        # For tracking BatchNorm batch statistics (Hypothesis 2)
+        self.bn_batch_stats = {}
+        self.bn_hooks_installed = False
+
+        # For tracking residual block statistics (Hypothesis 3)
+        self.residual_stats = {}
+        self.residual_hooks_installed = False
+
         # Initialize error log file
         import os
         os.makedirs(os.path.dirname(error_log_path) if os.path.dirname(error_log_path) else ".", exist_ok=True)
@@ -1132,14 +1144,171 @@ class CNNTrainer(Trainer):
 
     def training_step(self, model, inputs, num_items_in_batch=None):
         """Override training_step to add gradient monitoring."""
+        # Install hooks on first training step
+        if not self.activation_hooks_installed:
+            self._install_activation_hooks(model)
+        if not self.bn_hooks_installed:
+            self._install_batchnorm_hooks(model)
+        if not self.residual_hooks_installed:
+            self._install_residual_hooks(model)
+
         loss = super().training_step(model, inputs, num_items_in_batch)
 
         # After backward pass, check gradients and batch norm stats
         if model.training and self.state.global_step % self.args.logging_steps == 0:
             self._check_gradients(model)
             self._check_batchnorm_stats(model, mode="training")
+            self._check_prelu_params(model)
+            self._check_activation_magnitudes()
+            self._check_residual_blocks()
 
         return loss
+
+    def _install_activation_hooks(self, model):
+        """Install forward hooks to monitor activation magnitudes at each conv stage."""
+        if self.activation_hooks_installed:
+            return
+
+        import re
+
+        def make_hook(stage_name):
+            def hook(module, input, output):
+                # Capture output statistics
+                self.activation_stats[stage_name] = {
+                    'mean': output.mean().item(),
+                    'std': output.std().item(),
+                    'min': output.min().item(),
+                    'max': output.max().item(),
+                    'abs_mean': output.abs().mean().item(),
+                    'abs_max': output.abs().max().item(),
+                }
+            return hook
+
+        # Find and hook all conv stages (conv1, conv2, conv3, etc.)
+        conv_stages = []
+        for name, module in model.named_modules():
+            # Match module names like 'conv1', 'conv2', 'conv3', etc.
+            if re.match(r'^conv\d+$', name):
+                conv_stages.append(name)
+                module.register_forward_hook(make_hook(f'{name}_output'))
+
+        # Sort to ensure consistent ordering
+        conv_stages.sort()
+        self.conv_stage_names = conv_stages
+        self.activation_hooks_installed = True
+
+    def _install_batchnorm_hooks(self, model):
+        """Install hooks to capture batch statistics from BatchNorm layers during training."""
+        if self.bn_hooks_installed:
+            return
+
+        def make_bn_hook(layer_name):
+            def hook(module, input, output):
+                if module.training:
+                    # Compute batch statistics from input
+                    x = input[0]
+                    # Compute mean and var across batch and spatial dimensions
+                    # For BatchNorm2d: x shape is (N, C, H, W)
+                    # We compute stats over dims [0, 2, 3] to get per-channel stats
+                    batch_mean = x.mean(dim=[0, 2, 3])
+                    batch_var = x.var(dim=[0, 2, 3], unbiased=False)
+
+                    self.bn_batch_stats[layer_name] = {
+                        'batch_mean': batch_mean.detach(),
+                        'batch_var': batch_var.detach(),
+                    }
+            return hook
+
+        # Hook all BatchNorm2d layers
+        for name, module in model.named_modules():
+            if isinstance(module, nn.BatchNorm2d):
+                module.register_forward_hook(make_bn_hook(name))
+
+        self.bn_hooks_installed = True
+
+    def _install_residual_hooks(self, model):
+        """Install hooks to monitor residual block paths (Hypothesis 3: residual accumulation)."""
+        if self.residual_hooks_installed:
+            return
+
+        # Find all BottleneckBlock modules
+        for name, module in model.named_modules():
+            if isinstance(module, BottleneckBlock):
+                # Initialize storage for this block
+                block_stats = {
+                    'input': None,
+                    'main_path': None,
+                    'shortcut': None,
+                    'combined': None,
+                }
+                self.residual_stats[name] = block_stats
+
+                # Hook 1: Capture input to the block
+                def make_input_hook(block_name):
+                    def hook(module, input, output):
+                        if module.training:
+                            x = input[0]
+                            self.residual_stats[block_name]['input'] = {
+                                'std': x.std().item(),
+                                'mean': x.mean().item(),
+                                'abs_max': x.abs().max().item(),
+                            }
+                    return hook
+
+                module.register_forward_hook(make_input_hook(name))
+
+                # Hook 2: Capture main path output (after bn3, before addition)
+                def make_main_path_hook(block_name):
+                    def hook(module, input, output):
+                        if module.training:
+                            self.residual_stats[block_name]['main_path'] = {
+                                'std': output.std().item(),
+                                'mean': output.mean().item(),
+                                'abs_max': output.abs().max().item(),
+                            }
+                    return hook
+
+                module.bn3.register_forward_hook(make_main_path_hook(name))
+
+                # Hook 3: Capture shortcut output
+                if len(module.shortcut) > 0:  # Only if shortcut is not identity
+                    def make_shortcut_hook(block_name):
+                        def hook(module, input, output):
+                            if module.training:
+                                self.residual_stats[block_name]['shortcut'] = {
+                                    'std': output.std().item(),
+                                    'mean': output.mean().item(),
+                                    'abs_max': output.abs().max().item(),
+                                }
+                        return hook
+
+                    module.shortcut.register_forward_hook(make_shortcut_hook(name))
+                else:
+                    # Identity shortcut - copy input stats
+                    def make_identity_shortcut_hook(block_name):
+                        def hook(module, input, output):
+                            if module.training and self.residual_stats[block_name]['input']:
+                                self.residual_stats[block_name]['shortcut'] = self.residual_stats[block_name]['input'].copy()
+                        return hook
+
+                    module.register_forward_hook(make_identity_shortcut_hook(name))
+
+                # Hook 4: Capture combined output (before final activation)
+                # Use pre-hook on final_act to get value right after addition
+                def make_combined_hook(block_name):
+                    def hook(module, input):
+                        if module.training:
+                            combined = input[0]
+                            self.residual_stats[block_name]['combined'] = {
+                                'std': combined.std().item(),
+                                'mean': combined.mean().item(),
+                                'abs_max': combined.abs().max().item(),
+                            }
+                    return hook
+
+                module.final_act.register_forward_pre_hook(make_combined_hook(name))
+
+        self.residual_hooks_installed = True
 
     def evaluate(self, eval_dataset=None, ignore_keys=None, metric_key_prefix="eval"):
         """Override evaluate to check batch norm stats after evaluation."""
@@ -1308,5 +1477,252 @@ class CNNTrainer(Trainer):
                 self._log_anomaly(
                     step,
                     f"BatchNorm anomaly detected in {layer_name} ({mode})",
+                    details
+                )
+
+        # Check batch vs running variance mismatch (Hypothesis 2)
+        if mode == "training" and self.bn_batch_stats:
+            mismatch_layers = []
+
+            for name, module in model.named_modules():
+                if isinstance(module, nn.BatchNorm2d) and name in self.bn_batch_stats:
+                    batch_stats = self.bn_batch_stats[name]
+
+                    if module.running_var is not None:
+                        batch_var_mean = batch_stats['batch_var'].mean().item()
+                        running_var_mean = module.running_var.mean().item()
+
+                        if running_var_mean > 0:
+                            mismatch_ratio = abs(batch_var_mean - running_var_mean) / running_var_mean
+
+                            # Only log if mismatch is significant (>30%)
+                            if mismatch_ratio > 0.30:
+                                mismatch_layers.append({
+                                    'name': name,
+                                    'batch_var_mean': batch_var_mean,
+                                    'running_var_mean': running_var_mean,
+                                    'mismatch_ratio': mismatch_ratio
+                                })
+
+            # Log batch vs running variance mismatches
+            if mismatch_layers:
+                for mismatch in mismatch_layers:
+                    details = {
+                        "layer": mismatch['name'],
+                        "batch_var_mean": f"{mismatch['batch_var_mean']:.4f}",
+                        "running_var_mean": f"{mismatch['running_var_mean']:.4f}",
+                        "mismatch_ratio": f"{mismatch['mismatch_ratio']:.2%}",
+                    }
+                    self._log_anomaly(
+                        step,
+                        f"BatchNorm batch/running variance mismatch in {mismatch['name']}",
+                        details
+                    )
+
+    def _check_prelu_params(self, model):
+        """Check PReLU parameters for all layers."""
+        step = self.state.global_step
+        prelu_stats_all = []
+
+        for name, module in model.named_modules():
+            if isinstance(module, nn.PReLU):
+                # Get PReLU weight (the learnable alpha parameter)
+                if hasattr(module, 'weight') and module.weight is not None:
+                    alpha = module.weight.data
+                    issues = []
+
+                    # Check for NaN/Inf
+                    if torch.isnan(alpha).any():
+                        issues.append("alpha has NaN")
+                    elif torch.isinf(alpha).any():
+                        issues.append("alpha has Inf")
+                    else:
+                        # Check statistics
+                        alpha_mean = alpha.mean().item()
+                        alpha_min = alpha.min().item()
+                        alpha_max = alpha.max().item()
+                        alpha_std = alpha.std().item()
+
+                        # PReLU alpha should typically be small positive values (0.01-0.25)
+                        # Large alphas mean strong amplification of negative activations
+                        if alpha_max > 1.0:
+                            issues.append(f"alpha_max too large ({alpha_max:.4f})")
+                        if alpha_min < -0.5:
+                            issues.append(f"alpha_min too negative ({alpha_min:.4f})")
+                        if alpha_mean > 0.5:
+                            issues.append(f"alpha_mean too large ({alpha_mean:.4f})")
+                        if alpha_std > 0.5:
+                            issues.append(f"alpha_std too large ({alpha_std:.4f})")
+
+                        # Store stats for all layers
+                        prelu_stats_all.append({
+                            'name': name,
+                            'alpha_mean': alpha_mean,
+                            'alpha_min': alpha_min,
+                            'alpha_max': alpha_max,
+                            'alpha_std': alpha_std,
+                            'num_params': alpha.numel(),
+                            'issues': issues
+                        })
+
+        # Log all PReLU stats (layers with issues first, then healthy layers)
+        if prelu_stats_all:
+            # Sort: problematic layers first, then by layer depth
+            prelu_stats_all.sort(key=lambda x: (len(x['issues']) == 0, x['name']))
+
+            for stats in prelu_stats_all:
+                details = {
+                    "layer": stats['name'],
+                    "alpha_mean": f"{stats['alpha_mean']:.6f}",
+                    "alpha_min": f"{stats['alpha_min']:.6f}",
+                    "alpha_max": f"{stats['alpha_max']:.6f}",
+                    "alpha_std": f"{stats['alpha_std']:.6f}",
+                    "num_params": stats['num_params']
+                }
+                if stats['issues']:
+                    details["issues"] = ", ".join(stats['issues'])
+                    message = f"PReLU anomaly detected in {stats['name']}"
+                else:
+                    message = f"PReLU stats for {stats['name']}"
+
+                self._log_anomaly(step, message, details)
+
+    def _check_activation_magnitudes(self):
+        """Check activation magnitudes at each conv stage to track magnitude accumulation."""
+        step = self.state.global_step
+
+        if not self.activation_stats or not hasattr(self, 'conv_stage_names'):
+            return
+
+        # Log activation statistics ONLY for stages with issues
+        stage_outputs = [f'{stage}_output' for stage in self.conv_stage_names]
+
+        for stage_output in stage_outputs:
+            if stage_output in self.activation_stats:
+                stats = self.activation_stats[stage_output]
+                issues = []
+
+                # Check for abnormally large activations
+                if stats['abs_max'] > 50.0:
+                    issues.append(f"abs_max too large ({stats['abs_max']:.2f})")
+                if stats['abs_mean'] > 10.0:
+                    issues.append(f"abs_mean too large ({stats['abs_mean']:.2f})")
+                if stats['std'] > 10.0:
+                    issues.append(f"std too large ({stats['std']:.2f})")
+
+                # Only log if there are issues
+                if issues:
+                    details = {
+                        "stage": stage_output,
+                        "mean": f"{stats['mean']:.4f}",
+                        "std": f"{stats['std']:.4f}",
+                        "min": f"{stats['min']:.4f}",
+                        "max": f"{stats['max']:.4f}",
+                        "abs_mean": f"{stats['abs_mean']:.4f}",
+                        "abs_max": f"{stats['abs_max']:.4f}",
+                        "issues": ", ".join(issues)
+                    }
+
+                    message = f"Activation magnitude anomaly at {stage_output}"
+                    self._log_anomaly(step, message, details)
+
+        # Calculate growth rates and only log if any stage has excessive growth
+        if len(stage_outputs) >= 2:
+            growth_details = {}
+            excessive_growth = False
+            prev_std = None
+
+            for stage_output in stage_outputs:
+                if stage_output in self.activation_stats:
+                    curr_std = self.activation_stats[stage_output]['std']
+
+                    if prev_std is not None and prev_std > 0:
+                        growth = curr_std / prev_std
+                        growth_details[f"{stage_output}_growth"] = f"{growth:.4f}x"
+
+                        # Flag if growth exceeds 1.2x (20% increase per stage is concerning)
+                        if growth > 1.2:
+                            excessive_growth = True
+
+                    prev_std = curr_std
+
+            # Only log if there's excessive growth somewhere
+            if excessive_growth and growth_details:
+                self._log_anomaly(
+                    step,
+                    "Excessive activation magnitude growth detected",
+                    growth_details
+                )
+
+    def _check_residual_blocks(self):
+        """Check residual blocks for magnitude accumulation (Hypothesis 3)."""
+        step = self.state.global_step
+
+        if not self.residual_stats:
+            return
+
+        problematic_blocks = []
+
+        for block_name, stats in self.residual_stats.items():
+            # Skip if we don't have all the stats
+            if not all([stats.get('input'), stats.get('main_path'), stats.get('shortcut'), stats.get('combined')]):
+                continue
+
+            input_std = stats['input']['std']
+            main_std = stats['main_path']['std']
+            shortcut_std = stats['shortcut']['std']
+            combined_std = stats['combined']['std']
+
+            issues = []
+
+            # Check 1: Main path should be small corrections (main_std << shortcut_std)
+            if shortcut_std > 0:
+                main_to_shortcut_ratio = main_std / shortcut_std
+
+                # If main path is >50% of shortcut magnitude, it's not a "small correction"
+                if main_to_shortcut_ratio > 0.5:
+                    issues.append(f"main path too large (ratio: {main_to_shortcut_ratio:.2f}, expected <0.5)")
+
+            # Check 2: Combined output should not grow excessively from addition
+            if shortcut_std > 0:
+                growth_from_addition = combined_std / shortcut_std
+
+                # If combined grows >20% from addition, residuals are accumulating
+                if growth_from_addition > 1.2:
+                    issues.append(f"excessive growth from addition ({growth_from_addition:.2f}x, expected <1.2x)")
+
+            # Check 3: Absolute magnitude check
+            if combined_std > 10.0:
+                issues.append(f"combined_std too large ({combined_std:.2f})")
+
+            # Only log blocks with issues
+            if issues:
+                problematic_blocks.append({
+                    'name': block_name,
+                    'input_std': input_std,
+                    'main_std': main_std,
+                    'shortcut_std': shortcut_std,
+                    'combined_std': combined_std,
+                    'main_to_shortcut_ratio': main_std / shortcut_std if shortcut_std > 0 else 0,
+                    'growth_from_addition': combined_std / shortcut_std if shortcut_std > 0 else 0,
+                    'issues': issues
+                })
+
+        # Log problematic blocks
+        if problematic_blocks:
+            for block in problematic_blocks:
+                details = {
+                    "block": block['name'],
+                    "input_std": f"{block['input_std']:.4f}",
+                    "main_path_std": f"{block['main_std']:.4f}",
+                    "shortcut_std": f"{block['shortcut_std']:.4f}",
+                    "combined_std": f"{block['combined_std']:.4f}",
+                    "main_to_shortcut_ratio": f"{block['main_to_shortcut_ratio']:.4f}",
+                    "growth_from_addition": f"{block['growth_from_addition']:.4f}x",
+                    "issues": ", ".join(block['issues'])
+                }
+                self._log_anomaly(
+                    step,
+                    f"Residual block anomaly detected in {block['name']}",
                     details
                 )
