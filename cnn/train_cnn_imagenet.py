@@ -496,7 +496,7 @@ def main():
     print(f"✅ Training samples: {len(train_dataset):,}")
     print(f"✅ Validation samples: {len(eval_dataset):,}")
     
-    use_prelu = False
+    use_prelu = True
     
     # Create CNN model
     activation_type = "PReLU" if use_prelu else "ReLU"
