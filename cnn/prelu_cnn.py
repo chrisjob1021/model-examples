@@ -167,6 +167,12 @@ class BottleneckBlock(nn.Module):
                 nn.BatchNorm2d(out_channels, momentum=bn_momentum)
             )
 
+        # ReZero: Learnable residual scaling parameter
+        # Initialized to 0 to start with identity mapping, then learns optimal scaling
+        # This prevents magnitude accumulation and enables training of very deep networks
+        # Reference: "ReZero is All You Need" (Bachlechner et al., 2020)
+        self.residual_scale = nn.Parameter(torch.zeros(1))
+
     def forward(self, x):
         identity = x
 
@@ -182,8 +188,10 @@ class BottleneckBlock(nn.Module):
         out = self.conv3(out)  # Expand
         out = self.bn3(out)
 
-        # Add shortcut
-        out += self.shortcut(identity)
+        # ReZero: Add scaled residual to shortcut
+        # Start at 0 (pure identity), learn how much residual to add during training
+        # This prevents the magnitude accumulation seen in standard ResNets
+        out = self.shortcut(identity) + self.residual_scale * out
         out = self.final_act(out)
 
         return out
