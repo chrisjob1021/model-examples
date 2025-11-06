@@ -496,7 +496,7 @@ def main():
     print(f"✅ Training samples: {len(train_dataset):,}")
     print(f"✅ Validation samples: {len(eval_dataset):,}")
     
-    use_prelu = False # TODO: Re-enable PReLU (set to True) to prevent dying ReLU in conv5 (conv5.0 output_std=0.0245 due to ReLU killing negative values)
+    use_prelu = True # TODO: Re-enable PReLU (set to True) to prevent dying ReLU in conv5 (conv5.0 output_std=0.0245 due to ReLU killing negative values)
                        # PReLU allows negative values to pass through (scaled by alpha), preventing dead neurons
                        # Combined with ReZero scaling, this should stabilize conv5 training
     
