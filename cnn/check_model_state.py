@@ -38,11 +38,37 @@ def main():
         bn_momentum=0.1
     )
 
-    # Load checkpoint
-    checkpoint = torch.load(checkpoint_path, map_location='cpu')
-    model.load_state_dict(checkpoint['model_state_dict'])
-
-    print(f"✅ Loaded checkpoint from step {checkpoint.get('step', 'unknown')}")
+    # Load checkpoint - checkpoint_path is a directory, need to find the model file inside
+    if os.path.isdir(checkpoint_path):
+        # Look for model.safetensors or pytorch_model.bin in the checkpoint directory
+        model_path = os.path.join(checkpoint_path, "model.safetensors")
+        if not os.path.exists(model_path):
+            model_path = os.path.join(checkpoint_path, "pytorch_model.bin")
+        
+        if os.path.exists(model_path):
+            print(f"   Loading model from: {model_path}")
+            if model_path.endswith(".safetensors"):
+                from safetensors.torch import load_file
+                state_dict = load_file(model_path)
+            else:
+                state_dict = torch.load(model_path, map_location='cpu')
+                # If it's a full checkpoint dict, extract just the state_dict
+                if isinstance(state_dict, dict) and 'model_state_dict' in state_dict:
+                    state_dict = state_dict['model_state_dict']
+            model.load_state_dict(state_dict)
+            print(f"✅ Loaded checkpoint successfully")
+        else:
+            raise FileNotFoundError(f"Could not find model.safetensors or pytorch_model.bin in {checkpoint_path}")
+    else:
+        # If it's a file, try loading it directly
+        checkpoint = torch.load(checkpoint_path, map_location='cpu')
+        if isinstance(checkpoint, dict) and 'model_state_dict' in checkpoint:
+            model.load_state_dict(checkpoint['model_state_dict'])
+            print(f"✅ Loaded checkpoint from step {checkpoint.get('step', 'unknown')}")
+        else:
+            # Assume it's just a state_dict
+            model.load_state_dict(checkpoint)
+            print(f"✅ Loaded checkpoint successfully")
 
     # Check 1: Verify activation types
     print("\n" + "=" * 80)
