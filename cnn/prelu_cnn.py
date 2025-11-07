@@ -189,9 +189,10 @@ class BottleneckBlock(nn.Module):
         out = self.bn3(out)
 
         # ReZero: Add scaled residual to shortcut
-        # Start at 0 (pure identity), learn how much residual to add during training
+        # Use softplus to ensure scaling is always positive (prevents destructive interference)
+        # softplus(x) = log(1 + exp(x)) is always > 0
         # This prevents the magnitude accumulation seen in standard ResNets
-        out = self.shortcut(identity) + self.residual_scale * out
+        out = self.shortcut(identity) + F.softplus(self.residual_scale) * out
         out = self.final_act(out)
 
         return out
@@ -1162,6 +1163,11 @@ class CNNTrainer(Trainer):
 
         loss = super().training_step(model, inputs, num_items_in_batch)
 
+        # Clamp PReLU alpha values to [0, 1] after optimizer step
+        # This prevents pathological values like negative alphas (sign flipping)
+        # or alphas > 1 (asymmetric amplification)
+        self._clamp_prelu_alphas(model)
+
         # After backward pass, check gradients and batch norm stats
         if model.training and self.state.global_step % self.args.logging_steps == 0:
             self._check_gradients(model)
@@ -1171,6 +1177,18 @@ class CNNTrainer(Trainer):
             self._check_residual_blocks()
 
         return loss
+
+    def _clamp_prelu_alphas(self, model):
+        """Clamp PReLU alpha parameters to [0, 1] range to prevent pathological behavior.
+
+        - Alpha < 0: Flips sign of negative inputs (breaks monotonicity)
+        - Alpha > 1: Amplifies negatives more than positives (asymmetric growth)
+        - Valid range [0, 1]: 0=ReLU-like, 0.25=typical PReLU, 1=linear
+        """
+        with torch.no_grad():
+            for module in model.modules():
+                if isinstance(module, nn.PReLU):
+                    module.weight.clamp_(min=0.0, max=1.0)
 
     def _install_activation_hooks(self, model):
         """Install forward hooks to monitor activation magnitudes at each conv stage."""
