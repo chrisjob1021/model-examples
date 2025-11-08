@@ -498,24 +498,24 @@ class CNN(nn.Module):
         # Spatial dimension flow through the network (ResNet-50):
         # 1. Input: 224×224
         # 2. conv1 (7×7, stride=2, pad=3): (224 + 2*3 - 7)/2 + 1 = 112×112
-        # 3. MaxPool (3×3, stride=3): (112 - 3)/3 + 1 = 37×37
-        # 4. conv2 all 3 blocks (stride=1): stays 37×37
-        # 5. conv3 first BottleneckBlock (stride=2): (37 - 1)/2 + 1 = 19×19
-        # 6. conv3 remaining 3 blocks (stride=1): stay 19×19
-        # 7. conv4 first BottleneckBlock (stride=2): (19 - 1)/2 + 1 = 10×10
-        # 8. conv4 remaining 5 blocks (stride=1): stay 10×10
-        # 9. conv5 first BottleneckBlock (stride=2): (10 - 1)/2 + 1 = 5×5
-        # 10. conv5 remaining 2 blocks (stride=1): stay 5×5
+        # 3. MaxPool (3×3, stride=2, pad=1): (112 + 2*1 - 3)/2 + 1 = 56×56
+        # 4. conv2 all 3 blocks (stride=1): stays 56×56
+        # 5. conv3 first BottleneckBlock (stride=2): (56 - 1)/2 + 1 = 28×28
+        # 6. conv3 remaining 3 blocks (stride=1): stay 28×28
+        # 7. conv4 first BottleneckBlock (stride=2): (28 - 1)/2 + 1 = 14×14
+        # 8. conv4 remaining 5 blocks (stride=1): stay 14×14
+        # 9. conv5 first BottleneckBlock (stride=2): (14 - 1)/2 + 1 = 7×7
+        # 10. conv5 remaining 2 blocks (stride=1): stay 7×7
 
         # Layer 1: 7×7 conv, 64 filters, stride=2 (ImageNet input: 224×224)
         # We keep max pooling here (but replace it with stride=2 convs in later layers) because:
         # - Early layers detect simple features (edges/textures) where max pooling works well
-        # - Rapid spatial reduction (112→37) reduces computation for all subsequent layers
+        # - Rapid spatial reduction (112→56) reduces computation for all subsequent layers
         # - Standard practice in ResNet, VGG, and the original PReLU paper
         # - Only deeper layers with complex features benefit from learned downsampling
         self.conv1 = nn.Sequential(
             ConvAct(3, 64, kernel_size=7, stride=2, padding=3, use_prelu=use_prelu, use_builtin_conv=use_builtin_conv, prelu_channel_wise=prelu_channel_wise, bn_momentum=bn_momentum),  # 224×224 → 112×112
-            ManualMaxPool2d(kernel_size=3, stride=3, padding=0, use_builtin=use_builtin_conv)  # 112×112 → 37×37
+            ManualMaxPool2d(kernel_size=3, stride=2, padding=1, use_builtin=use_builtin_conv)  # 112×112 → 56×56
         )
 
         # Improved architecture based on ResNet principles:
@@ -533,74 +533,66 @@ class CNN(nn.Module):
         # First block: 64 → 64 planes (256 output channels), stride=1 (no downsampling yet)
         # Remaining blocks: 256 → 64 planes (256 output channels)
         self.conv2 = nn.Sequential(
-            BottleneckBlock(64, 64, stride=1,  # No stride here, already 37×37
+            BottleneckBlock(64, 64, stride=1,  # No stride here, already 56×56
                           use_prelu=use_prelu, use_builtin_conv=use_builtin_conv, prelu_channel_wise=prelu_channel_wise, bn_momentum=bn_momentum),
             *[BottleneckBlock(256, 64, stride=1,
                             use_prelu=use_prelu, use_builtin_conv=use_builtin_conv, prelu_channel_wise=prelu_channel_wise, bn_momentum=bn_momentum)
-              for i in range(2)]  # Stays 37×37
+              for i in range(2)]  # Stays 56×56
         )
 
         # conv3_x: 4 bottleneck blocks
         # First block: 256 → 128 planes (512 output channels), stride=2 for downsampling
         # Remaining blocks: 512 → 128 planes (512 output channels)
         self.conv3 = nn.Sequential(
-            BottleneckBlock(256, 128, stride=2,  # 37×37 → 19×19
+            BottleneckBlock(256, 128, stride=2,  # 56×56 → 28×28
                           use_prelu=use_prelu, use_builtin_conv=use_builtin_conv, prelu_channel_wise=prelu_channel_wise, bn_momentum=bn_momentum),
             *[BottleneckBlock(512, 128, stride=1,
                             use_prelu=use_prelu, use_builtin_conv=use_builtin_conv, prelu_channel_wise=prelu_channel_wise, bn_momentum=bn_momentum)
-              for i in range(3)]  # Stays 19×19
+              for i in range(3)]  # Stays 28×28
         )
 
         # conv4_x: 6 bottleneck blocks
         # First block: 512 → 256 planes (1024 output channels), stride=2 for downsampling
         # Remaining blocks: 1024 → 256 planes (1024 output channels)
         self.conv4 = nn.Sequential(
-            BottleneckBlock(512, 256, stride=2,  # 19×19 → 10×10
+            BottleneckBlock(512, 256, stride=2,  # 28×28 → 14×14
                           use_prelu=use_prelu, use_builtin_conv=use_builtin_conv, prelu_channel_wise=prelu_channel_wise, bn_momentum=bn_momentum),
             *[BottleneckBlock(1024, 256, stride=1,
                             use_prelu=use_prelu, use_builtin_conv=use_builtin_conv, prelu_channel_wise=prelu_channel_wise, bn_momentum=bn_momentum)
-              for i in range(5)]  # Stays 10×10
+              for i in range(5)]  # Stays 14×14
         )
 
         # conv5_x: 3 bottleneck blocks
         # First block: 1024 → 512 planes (2048 output channels), stride=2 for downsampling
         # Remaining blocks: 2048 → 512 planes (2048 output channels)
         self.conv5 = nn.Sequential(
-            BottleneckBlock(1024, 512, stride=2,  # 10×10 → 5×5
+            BottleneckBlock(1024, 512, stride=2,  # 14×14 → 7×7
                           use_prelu=use_prelu, use_builtin_conv=use_builtin_conv, prelu_channel_wise=prelu_channel_wise, bn_momentum=bn_momentum),
             *[BottleneckBlock(2048, 512, stride=1,
                             use_prelu=use_prelu, use_builtin_conv=use_builtin_conv, prelu_channel_wise=prelu_channel_wise, bn_momentum=bn_momentum)
-              for i in range(2)]  # Stays 5×5
+              for i in range(2)]  # Stays 7×7
         )
-        
-        # Spatial Pyramid Pooling (as used in PReLU paper)
-        # Updated for 5×5 feature maps from conv5
+
+        # Global Average Pooling (standard ResNet-50)
+        # Transforms: (batch, 2048, 7, 7) → (batch, 2048, 1, 1)
         #
-        # With 5×5 feature maps, we use levels [5,2,1]:
-        # - Level 5: 5×5 grid = entire feature map (25 bins)
-        # - Level 2: 2×2 grid (4 bins)
-        # - Level 1: 1×1 grid = global pooling (1 bin)
+        # How it works:
+        # - For each of the 2048 channels independently:
+        #   * Take the 7×7 spatial grid (49 values)
+        #   * Compute the mean of those 49 values
+        #   * Result: 1 scalar per channel
+        # - Final output: 2048 features (one per channel)
         #
-        # Total bins: 5²+2²+1² = 25+4+1 = 30 bins per channel
-        # With 2048 channels from conv5 (ResNet-50): 2048 × 30 = 61,440 features fed to classifier
-        self.spp = nn.Sequential(
-            SpatialPyramidPooling(levels=[5, 2, 1]),
-            nn.Flatten(1),
-        )
+        # Why this regularizes:
+        # - Enforces spatial invariance: model can't memorize object positions
+        # - Zero learnable parameters (just averaging)
+        # - Forces learning of location-independent semantic features
+        self.avgpool = nn.AdaptiveAvgPool2d((1, 1))
 
-        self.classifier = nn.Sequential(
-            nn.Linear(2048 * 30, 4096, bias=True),              # 61,440 → 4,096
-            nn.PReLU(4096 if (use_prelu and prelu_channel_wise) else 1)
-                if use_prelu else nn.ReLU(inplace=True),
-            nn.Dropout(0.5),                                    # ← after fc1 activation
-
-            nn.Linear(4096, 4096, bias=True),                   # 4,096 → 4,096
-            nn.PReLU(4096 if (use_prelu and prelu_channel_wise) else 1)
-                if use_prelu else nn.ReLU(inplace=True),
-            nn.Dropout(0.5),                                    # ← after fc2 activation
-
-            nn.Linear(4096, num_classes)                        # 4,096 → 1,000 (or 10)
-        )
+        # Classifier: Simple linear layer (standard ResNet-50)
+        # 2048 features → num_classes
+        # Parameters: 2048 × 1000 = 2.05M (vs 511M with SPP!)
+        self.fc = nn.Linear(2048, num_classes)
         
     def forward(self, x=None, pixel_values=None, **kwargs):
         # Handle both positional and keyword arguments for compatibility with HuggingFace Trainer
@@ -620,10 +612,11 @@ class CNN(nn.Module):
         x = self.conv4(x)
         x = self.conv5(x)
 
-        # Apply SPP and flatten
-        x = self.spp(x)  # (batch, 512 * 30)
-        
-        return self.classifier(x)
+        # Apply global average pooling and flatten
+        x = self.avgpool(x)  # (batch, 2048, 1, 1)
+        x = torch.flatten(x, 1)  # (batch, 2048)
+
+        return self.fc(x)
 
     @classmethod
     def from_pretrained(cls, checkpoint_path, use_prelu=None, use_builtin_conv=True, prelu_channel_wise=True, num_classes=1000, device=None):
