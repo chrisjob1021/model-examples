@@ -674,12 +674,7 @@ def main():
         per_device_train_batch_size=batch_size_per_gpu,  # Reduced for stability
         per_device_eval_batch_size=batch_size_per_gpu,
         learning_rate=initial_lr,
-        weight_decay=2e-3,  # Weight decay with WD/LR ratio of 2.0 (2e-3 / 1e-3 = 2.0)
-                            # This is a standard ratio for AdamW training on vision models
-                            # Typical range: 0.2 to 2.0 (we're at the higher end for more regularization)
-                            # Previous value (2e-2) was too aggressive relative to LR (ratio of 200!)
-                            # This balanced approach allows model to learn while maintaining regularization
-                            # L2 regularization penalizes large weights, improves generalization
+        weight_decay=1e-3, # TODO: Typical ratio for WD/LR: 0.5 to 2.0 (we're at the higher end for more regularization)
         warmup_ratio=warmup_ratio,  # Dynamic warmup based on resume status
         gradient_accumulation_steps=grad_accum,
         eval_steps=1,
@@ -769,11 +764,11 @@ def main():
         # Momentum just adds inertia: keep μ of last velocity (useful when directions persist, otherwise it resists),
         # then take the same downhill step −η ∇f(θ_t).
 
-        max_grad_norm=0.5,  # Tighter clipping to prevent gradient explosion
+        max_grad_norm=5.0,  # Tighter clipping to prevent gradient explosion
                             # Clips gradient norm to max value of 0.5 (reduced from 1.0)
                             # This prevents the wild loss spikes visible in TensorBoard
                             # Trade-off: too tight (e.g., 0.1) slows convergence; 0.5 provides more stability
-                            # TODO: adjust as needed for gradient instability with higher LR
+                            # TODO: consider removing entirely if this is stable
         lr_scheduler_type="cosine_with_min_lr",  # Cosine annealing with minimum LR
         lr_scheduler_kwargs={
             "min_lr_rate": 0.30,  # Minimum LR as ratio of initial LR (% of initial)
