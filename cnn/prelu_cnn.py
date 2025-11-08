@@ -954,11 +954,49 @@ def get_cosine_with_hard_restarts_decay_schedule_with_warmup(
 class CNNTrainer(Trainer):
     """Custom trainer for CNN models with gradient anomaly logging."""
 
-    def __init__(self, *args, error_log_path="gradient_anomalies.log", **kwargs):
+    def __init__(self, *args, error_log_path="gradient_anomalies.log",
+                 logging_thresholds=None, **kwargs):
         super().__init__(*args, **kwargs)
         self.error_log_path = error_log_path
-        self.grad_norm_threshold = 7.0  # Log when grad norm exceeds this
         self.last_loss = None
+
+        # Logging thresholds - can be configured from training script
+        default_thresholds = {
+            # Gradient thresholds
+            'grad_norm': 7.0,  # Log when grad norm exceeds this
+            'param_norm': 100.0,  # Log individual param norms exceeding this
+
+            # BatchNorm thresholds
+            'bn_mean_abs': 10.0,  # running_mean absolute value
+            'bn_var_mean': 100.0,  # running_var mean value (upper bound)
+            'bn_var_max': 1000.0,  # running_var max value
+            'bn_var_min': 0.01,  # running_var mean value (lower bound)
+
+            # PReLU thresholds
+            'prelu_alpha_max': 1.0,  # Maximum alpha value
+            'prelu_alpha_min': -0.5,  # Minimum alpha value (negative threshold)
+            'prelu_alpha_mean': 0.5,  # Mean alpha value
+            'prelu_alpha_std': 0.5,  # Std of alpha values
+
+            # Activation magnitude thresholds
+            'act_abs_max': 50.0,  # Maximum absolute activation
+            'act_abs_mean': 10.0,  # Mean absolute activation
+            'act_std': 10.0,  # Activation standard deviation
+            'act_growth': 1.2,  # Growth ratio between stages
+
+            # Residual block thresholds
+            'residual_main_to_shortcut_ratio': 1.5,  # Main path vs shortcut magnitude
+            'residual_growth_from_addition': 2.0,  # Combined growth from addition
+            'residual_combined_std': 10.0,  # Absolute combined std threshold
+        }
+
+        # Merge user-provided thresholds with defaults
+        self.thresholds = default_thresholds.copy()
+        if logging_thresholds:
+            self.thresholds.update(logging_thresholds)
+
+        # Keep grad_norm_threshold for backward compatibility
+        self.grad_norm_threshold = self.thresholds['grad_norm']
 
         # For tracking activation magnitudes
         self.activation_stats = {}
@@ -1369,7 +1407,7 @@ class CNNTrainer(Trainer):
                 layer_norms[layer_name] += param_norm ** 2
 
                 # Check for abnormally large gradients in individual parameters
-                if param_norm > 100.0:
+                if param_norm > self.thresholds['param_norm']:
                     large_grad_params.append((name, param_norm))
 
         total_norm = total_norm ** 0.5
@@ -1447,7 +1485,7 @@ class CNNTrainer(Trainer):
                         issues.append("running_mean has Inf")
                     else:
                         mean_abs = module.running_mean.abs().mean().item()
-                        if mean_abs > 10.0:
+                        if mean_abs > self.thresholds['bn_mean_abs']:
                             issues.append(f"running_mean abnormally large (avg abs: {mean_abs:.2f})")
 
                 # Check running_var
@@ -1461,11 +1499,11 @@ class CNNTrainer(Trainer):
                     else:
                         var_mean = module.running_var.mean().item()
                         var_max = module.running_var.max().item()
-                        if var_mean > 100.0:
+                        if var_mean > self.thresholds['bn_var_mean']:
                             issues.append(f"running_var abnormally large (avg: {var_mean:.2f})")
-                        if var_max > 1000.0:
+                        if var_max > self.thresholds['bn_var_max']:
                             issues.append(f"running_var max too large ({var_max:.2f})")
-                        if var_mean < 0.01:
+                        if var_mean < self.thresholds['bn_var_min']:
                             issues.append(f"running_var abnormally small (avg: {var_mean:.6f})")
 
                 # Check weight and bias (gamma and beta parameters)
@@ -1564,13 +1602,13 @@ class CNNTrainer(Trainer):
 
                         # PReLU alpha should typically be small positive values (0.01-0.25)
                         # Large alphas mean strong amplification of negative activations
-                        if alpha_max > 1.0:
+                        if alpha_max > self.thresholds['prelu_alpha_max']:
                             issues.append(f"alpha_max too large ({alpha_max:.4f})")
-                        if alpha_min < -0.5:
+                        if alpha_min < self.thresholds['prelu_alpha_min']:
                             issues.append(f"alpha_min too negative ({alpha_min:.4f})")
-                        if alpha_mean > 0.5:
+                        if alpha_mean > self.thresholds['prelu_alpha_mean']:
                             issues.append(f"alpha_mean too large ({alpha_mean:.4f})")
-                        if alpha_std > 0.5:
+                        if alpha_std > self.thresholds['prelu_alpha_std']:
                             issues.append(f"alpha_std too large ({alpha_std:.4f})")
 
                         # Store stats for all layers
@@ -1622,11 +1660,11 @@ class CNNTrainer(Trainer):
                 issues = []
 
                 # Check for abnormally large activations
-                if stats['abs_max'] > 50.0:
+                if stats['abs_max'] > self.thresholds['act_abs_max']:
                     issues.append(f"abs_max too large ({stats['abs_max']:.2f})")
-                if stats['abs_mean'] > 10.0:
+                if stats['abs_mean'] > self.thresholds['act_abs_mean']:
                     issues.append(f"abs_mean too large ({stats['abs_mean']:.2f})")
-                if stats['std'] > 10.0:
+                if stats['std'] > self.thresholds['act_std']:
                     issues.append(f"std too large ({stats['std']:.2f})")
 
                 # Only log if there are issues
@@ -1659,8 +1697,8 @@ class CNNTrainer(Trainer):
                         growth = curr_std / prev_std
                         growth_details[f"{stage_output}_growth"] = f"{growth:.4f}x"
 
-                        # Flag if growth exceeds 1.2x (20% increase per stage is concerning)
-                        if growth > 1.2:
+                        # Flag if growth exceeds threshold
+                        if growth > self.thresholds['act_growth']:
                             excessive_growth = True
 
                     prev_std = curr_std
@@ -1698,20 +1736,22 @@ class CNNTrainer(Trainer):
             if shortcut_std > 0:
                 main_to_shortcut_ratio = main_std / shortcut_std
 
-                # If main path is >50% of shortcut magnitude, it's not a "small correction"
-                if main_to_shortcut_ratio > 0.5:
-                    issues.append(f"main path too large (ratio: {main_to_shortcut_ratio:.2f}, expected <0.5)")
+                # If main path is dominating the shortcut
+                threshold = self.thresholds['residual_main_to_shortcut_ratio']
+                if main_to_shortcut_ratio > threshold:
+                    issues.append(f"main path too large (ratio: {main_to_shortcut_ratio:.2f}, expected <{threshold})")
 
             # Check 2: Combined output should not grow excessively from addition
             if shortcut_std > 0:
                 growth_from_addition = combined_std / shortcut_std
 
-                # If combined grows >20% from addition, residuals are accumulating
-                if growth_from_addition > 1.2:
-                    issues.append(f"excessive growth from addition ({growth_from_addition:.2f}x, expected <1.2x)")
+                # If combined grows excessively from addition, residuals are accumulating
+                threshold = self.thresholds['residual_growth_from_addition']
+                if growth_from_addition > threshold:
+                    issues.append(f"excessive growth from addition ({growth_from_addition:.2f}x, expected <{threshold}x)")
 
             # Check 3: Absolute magnitude check
-            if combined_std > 10.0:
+            if combined_std > self.thresholds['residual_combined_std']:
                 issues.append(f"combined_std too large ({combined_std:.2f})")
 
             # Only log blocks with issues

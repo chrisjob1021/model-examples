@@ -330,6 +330,38 @@ def main():
     random_erasing_prob = 0.1
     cutmix_alpha = 1.0
     cutmix_prob = 0.0  # Disabled - CutMix creates mixed labels (e.g., 60% cat + 40% dog) that make optimization harder
+
+    # Logging thresholds for anomaly detection
+    # These control when warnings are logged for model internals (gradients, activations, etc.)
+    # Higher values = less sensitive (fewer warnings), lower values = more sensitive (more warnings)
+    logging_thresholds = {
+        # Gradient thresholds
+        'grad_norm': 7.0,  # Log when total gradient norm exceeds this (typical: 3-7 for your model)
+        'param_norm': 100.0,  # Log individual parameter norms exceeding this
+
+        # BatchNorm thresholds
+        'bn_mean_abs': 10.0,  # running_mean absolute value
+        'bn_var_mean': 100.0,  # running_var mean value (upper bound)
+        'bn_var_max': 1000.0,  # running_var max value
+        'bn_var_min': 0.01,  # running_var mean value (lower bound)
+
+        # PReLU thresholds
+        'prelu_alpha_max': 1.0,  # Maximum alpha value
+        'prelu_alpha_min': -0.5,  # Minimum alpha value (negative threshold)
+        'prelu_alpha_mean': 0.5,  # Mean alpha value
+        'prelu_alpha_std': 0.5,  # Std of alpha values
+
+        # Activation magnitude thresholds
+        'act_abs_max': 50.0,  # Maximum absolute activation
+        'act_abs_mean': 10.0,  # Mean absolute activation
+        'act_std': 10.0,  # Activation standard deviation
+        'act_growth': 1.2,  # Growth ratio between conv stages
+
+        # Residual block thresholds (adjusted from 0.5/1.2 to 1.5/2.0 for stable training)
+        'residual_main_to_shortcut_ratio': 1.5,  # Main path vs shortcut magnitude
+        'residual_growth_from_addition': 2.0,  # Combined growth from residual addition
+        'residual_combined_std': 10.0,  # Absolute combined std threshold
+    }
                         # When training is already unstable (sharp minima), this compounds the problem
                         #
                         # Important distinction:
@@ -859,7 +891,10 @@ def main():
         trainer_class=CNNTrainer,
         data_collator=cutmix_collator,  # Add CutMix collator for batch-level augmentation
         resume_from_checkpoint=None,  # Don't resume trainer state - we loaded weights manually
-        trainer_kwargs={"error_log_path": error_log_path},  # Pass error log path for gradient anomaly tracking
+        trainer_kwargs={
+            "error_log_path": error_log_path,  # Pass error log path for gradient anomaly tracking
+            "logging_thresholds": logging_thresholds,  # Pass configurable logging thresholds
+        },
     )
     
     # Log hyperparameters to TensorBoard
@@ -906,6 +941,13 @@ def main():
             'augmentation/randaugment_ops': randaugment_ops,
             'augmentation/randaugment_magnitude': randaugment_magnitude,
             'augmentation/random_erasing_prob': random_erasing_prob,
+
+            # Logging thresholds
+            'logging/grad_norm_threshold': logging_thresholds['grad_norm'],
+            'logging/param_norm_threshold': logging_thresholds['param_norm'],
+            'logging/residual_main_to_shortcut_ratio': logging_thresholds['residual_main_to_shortcut_ratio'],
+            'logging/residual_growth_from_addition': logging_thresholds['residual_growth_from_addition'],
+            'logging/act_growth_threshold': logging_thresholds['act_growth'],
 
             # System
             'system/num_workers': training_args.dataloader_num_workers,
