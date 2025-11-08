@@ -261,7 +261,6 @@ def main():
     print(f"Using device: {device}")
 
     # L40S/Ada GPU-specific settings for numerical stability
-    # TODO: Configuring L40S-specific settings to address gradient instability
     # TF32 is enabled by default on Ampere/Ada (A100, H100, L40S, RTX 30/40)
     # It uses reduced precision (10-bit mantissa vs 23-bit FP32) which can cause
     # numerical instability in BatchNorm and gradient computations
@@ -905,8 +904,6 @@ def main():
 
             # Scheduler
             'scheduler/type': training_args.lr_scheduler_type,
-            # TODO: fix this, it's always logging 0
-            #'scheduler/min_lr_rate': training_args.lr_scheduler_kwargs.get('min_lr_rate', 0) if training_args.lr_scheduler_kwargs else 0,
 
             # Data augmentation
             'augmentation/cutmix_alpha': cutmix_alpha,
