@@ -2,6 +2,7 @@
 """Check model state to diagnose PReLU and ReZero issues"""
 
 import torch
+import torch.nn.functional as F
 import os
 from prelu_cnn import CNN
 from shared_utils import find_latest_checkpoint
@@ -112,27 +113,71 @@ def main():
         print("❌ No residual_scale parameters found!")
         print("   ReZero is NOT implemented in this checkpoint!")
     else:
-        print(f"Found {len(residual_scales)} residual_scale parameters:\n")
+        print(f"Found {len(residual_scales)} residual_scale parameters:")
+        print(f"\n{'Block':<20} {'Raw Scale':<12} {'Softplus(Scale)':<18} {'Status':<25}")
+        print("-" * 80)
 
-        # Show first 5, middle 5, and last 5
-        for i, (name, value) in enumerate(residual_scales):
-            if i < 5 or i >= len(residual_scales) - 5 or abs(i - len(residual_scales)//2) < 3:
-                print(f"  {name}: {value:.6f}")
-            elif i == 5:
-                print(f"  ... ({len(residual_scales) - 10} more) ...")
+        # Show all residual scales with softplus transformation
+        for name, raw_value in residual_scales:
+            # Extract block name (e.g., "conv2.0" from "conv2.0.residual_scale")
+            block_name = name.replace('.residual_scale', '')
+
+            # Apply softplus transformation (same as in model forward pass)
+            scaled_value = F.softplus(torch.tensor(raw_value)).item()
+
+            # Determine status
+            if scaled_value < 0.1:
+                status = "⚠️  VERY WEAK (< 0.1x)"
+            elif scaled_value < 0.5:
+                status = "⚠️  Weak (< 0.5x)"
+            elif scaled_value < 1.0:
+                status = "✓ Moderate (0.5-1x)"
+            elif scaled_value < 2.0:
+                status = "✓ Healthy (1-2x)"
+            else:
+                status = f"✓ Strong ({scaled_value:.1f}x)"
+
+            print(f"{block_name:<20} {raw_value:<12.4f} {scaled_value:<18.4f} {status}")
+
+        print("-" * 80)
 
         # Statistics
-        values = [v for _, v in residual_scales]
-        print(f"\nStatistics:")
-        print(f"  Mean: {sum(values)/len(values):.6f}")
-        print(f"  Min:  {min(values):.6f}")
-        print(f"  Max:  {max(values):.6f}")
+        raw_values = [v for _, v in residual_scales]
+        scaled_values = [F.softplus(torch.tensor(v)).item() for v in raw_values]
 
-        if max(values) < 0.001:
-            print(f"\n⚠️  WARNING: All residual_scale values are ~0!")
-            print(f"   ReZero parameters may not be learning!")
+        print(f"\nRaw Scale Statistics:")
+        print(f"  Mean: {sum(raw_values)/len(raw_values):.6f}")
+        print(f"  Min:  {min(raw_values):.6f}")
+        print(f"  Max:  {max(raw_values):.6f}")
+
+        print(f"\nActual Multiplier (Softplus) Statistics:")
+        print(f"  Mean: {sum(scaled_values)/len(scaled_values):.4f}")
+        print(f"  Min:  {min(scaled_values):.4f}")
+        print(f"  Max:  {max(scaled_values):.4f}")
+
+        # Check for issues
+        weak_blocks = [(name.replace('.residual_scale', ''), v)
+                       for name, v in residual_scales
+                       if F.softplus(torch.tensor(v)).item() < 0.1]
+
+        if weak_blocks:
+            print(f"\n⚠️  WARNING: {len(weak_blocks)} blocks have very weak residuals (< 0.1x):")
+            for block_name, raw_val in weak_blocks:
+                scaled = F.softplus(torch.tensor(raw_val)).item()
+                print(f"     {block_name}: softplus({raw_val:.4f}) = {scaled:.4f}")
+            print(f"   These residual paths contribute < 10% of their magnitude!")
+        elif min(scaled_values) < 0.5:
+            print(f"\n⚠️  Some blocks have weak residuals (< 0.5x)")
         else:
-            print(f"\n✅ ReZero parameters are learning (non-zero values)")
+            print(f"\n✅ All ReZero parameters show healthy residual contributions")
+
+        print(f"\nInterpretation:")
+        print(f"  - ReZero scales the residual path: out = shortcut + softplus(scale) * residual")
+        print(f"  - Softplus ensures the scale is always positive")
+        print(f"  - < 0.1x: Residual essentially dead (shortcut dominates)")
+        print(f"  - 0.5-2x: Healthy balance between paths")
+        print(f"  - > 2x: Residual dominates (less typical but can work)")
+        print(f"  - If conv5 blocks show < 0.1x, this explains collapsed shortcuts")
 
     # Check 3: PReLU alpha parameters
     print("\n" + "=" * 80)
