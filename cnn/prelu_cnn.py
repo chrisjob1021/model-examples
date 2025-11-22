@@ -18,6 +18,7 @@ import math
 import warnings
 from torch.optim.lr_scheduler import _LRScheduler
 from typing import Optional
+from timm.layers import DropPath  # Stochastic depth implementation
 
 class ConvAct(nn.Module):
     def __init__(self, in_channels, out_channels, kernel_size, stride=1, padding=0, use_prelu=False, use_builtin_conv=False, prelu_channel_wise=True, bn_momentum=0.1):
@@ -110,13 +111,19 @@ class BottleneckBlock(nn.Module):
     This is more efficient than basic blocks for deep networks:
     - Basic block (256->256): 2 * (3*3*256*256) = 1.18M params
     - Bottleneck (256->256): 1*1*256*64 + 3*3*64*64 + 1*1*64*256 = 70K params
+
+    Supports stochastic depth (DropPath) for regularization:
+    - Randomly drops the entire residual branch during training
+    - Output becomes just the shortcut (identity or projection)
+    - Drop probability increases linearly with depth (linear decay rule)
+    - Reference: "Deep Networks with Stochastic Depth" (Huang et al., 2016)
     """
 
     # Expansion factor: output channels = planes * expansion
     # This is ALWAYS 4 for standard ResNet bottleneck blocks.
     expansion = 4
 
-    def __init__(self, in_channels, planes, stride=1, use_prelu=False, use_builtin_conv=False, prelu_channel_wise=True, bn_momentum=0.1):
+    def __init__(self, in_channels, planes, stride=1, use_prelu=False, use_builtin_conv=False, prelu_channel_wise=True, bn_momentum=0.1, drop_path=0.0):
         """
         Args:
             in_channels: Number of input channels
@@ -128,6 +135,7 @@ class BottleneckBlock(nn.Module):
             use_builtin_conv: Whether to use PyTorch's built-in convolutions
             prelu_channel_wise: Whether to use channel-wise PReLU parameters
             bn_momentum: Momentum for batch normalization
+            drop_path: Drop path rate for stochastic depth (0.0 = no dropping)
         """
         super().__init__()
 
@@ -173,6 +181,42 @@ class BottleneckBlock(nn.Module):
         # Reference: "ReZero is All You Need" (Bachlechner et al., 2020)
         self.residual_scale = nn.Parameter(torch.zeros(1))
 
+        # Stochastic Depth (DropPath)
+        # Reference: "Deep Networks with Stochastic Depth" (Huang et al., 2016)
+        #
+        # WHAT IT DOES:
+        # During training, randomly drops the entire residual branch with probability p.
+        # When dropped: output = shortcut (the residual contribution is zeroed out)
+        # When kept: output = shortcut + residual (normal ResNet behavior)
+        #
+        # HOW DROPPATH WORKS:
+        # 1. Sample a random mask per sample in the batch (Bernoulli with p=drop_path)
+        # 2. If mask=0: zero out the residual path entirely for that sample
+        # 3. If mask=1: scale residual by 1/(1-p) to maintain expected value
+        #    This scaling ensures E[output] is the same during training and inference
+        #
+        # WHY IT HELPS:
+        # 1. Regularization: Like dropout, but at block level instead of neuron level
+        # 2. Implicit ensemble: Training samples see networks of varying depths
+        #    - Some samples train a 50-layer network, others a 30-layer, etc.
+        #    - At inference, we get an ensemble average of all these depths
+        # 3. Gradient flow: Shorter paths (when blocks dropped) have better gradients
+        #    - Reduces vanishing gradient in very deep networks
+        # 4. Reduces co-adaptation: Blocks can't rely on specific earlier blocks
+        #
+        # LINEAR DECAY RULE (from original paper):
+        # - First block: drop_path = 0 (never dropped, always trained)
+        # - Last block: drop_path = max_rate (e.g., 0.1 = 10% drop chance)
+        # - Intermediate: linearly interpolated based on depth
+        # Rationale: Earlier layers learn fundamental features (edges, textures)
+        # that all images need. Later layers learn high-level combinations that
+        # may be more redundant and benefit from regularization.
+        #
+        # AT INFERENCE:
+        # DropPath is disabled (all blocks active), but the learned weights
+        # already account for the stochastic training via the 1/(1-p) scaling.
+        self.drop_path = DropPath(drop_path) if drop_path > 0.0 else nn.Identity()
+
     def forward(self, x):
         identity = x
 
@@ -188,11 +232,16 @@ class BottleneckBlock(nn.Module):
         out = self.conv3(out)  # Expand
         out = self.bn3(out)
 
-        # ReZero: Add scaled residual to shortcut
-        # Use softplus to ensure scaling is always positive (prevents destructive interference)
-        # softplus(x) = log(1 + exp(x)) is always > 0
-        # This prevents the magnitude accumulation seen in standard ResNets
-        out = self.shortcut(identity) + F.softplus(self.residual_scale) * out
+        # ReZero: Scale residual by learned parameter (starts at 0, learns optimal scaling)
+        # softplus ensures scaling is always positive (prevents destructive interference)
+        out = F.softplus(self.residual_scale) * out
+
+        # Stochastic depth: randomly drop the residual path during training
+        # When dropped, this block becomes an identity mapping (output = shortcut)
+        out = self.drop_path(out)
+
+        # Add shortcut (identity or projection) to (possibly dropped) residual
+        out = self.shortcut(identity) + out
         out = self.final_act(out)
 
         return out
@@ -481,11 +530,12 @@ class CNN(nn.Module):
         Only used when use_prelu=True. Defaults to ``True``.
     """
 
-    def __init__(self, use_prelu: bool = False, *, use_builtin_conv: bool = True, prelu_channel_wise: bool = True, num_classes: int = 1000, bn_momentum: float = 0.1):
+    def __init__(self, use_prelu: bool = False, *, use_builtin_conv: bool = True, prelu_channel_wise: bool = True, num_classes: int = 1000, bn_momentum: float = 0.1, drop_path_rate: float = 0.0):
         super().__init__()
         self.num_classes = num_classes
         self.bn_momentum = bn_momentum
-        
+        self.drop_path_rate = drop_path_rate
+
         # Warn if using slow manual convolutions
         if not use_builtin_conv:
             warnings.warn(
@@ -494,6 +544,19 @@ class CNN(nn.Module):
                 UserWarning,
                 stacklevel=2
             )
+
+        # Stochastic depth: calculate per-block drop rates using linear decay rule
+        # ResNet-50 has 16 bottleneck blocks total: [3, 4, 6, 3] = 16 blocks
+        # Linear decay: drop_rate increases from 0 at block 0 to drop_path_rate at block 15
+        # Formula: drop_rate[i] = drop_path_rate * i / (total_blocks - 1)
+        #
+        # Example with drop_path_rate=0.1 and 16 blocks:
+        #   Block 0:  0.0    (first block never dropped)
+        #   Block 7:  0.047  (middle blocks have ~5% drop rate)
+        #   Block 15: 0.1    (last block has full 10% drop rate)
+        total_blocks = 3 + 4 + 6 + 3  # 16 blocks for ResNet-50
+        drop_rates = [drop_path_rate * i / (total_blocks - 1) for i in range(total_blocks)]
+        block_idx = 0  # Counter to track which block we're creating
         
         # Spatial dimension flow through the network (ResNet-50):
         # 1. Input: 224×224
@@ -532,46 +595,54 @@ class CNN(nn.Module):
         # conv2_x: 3 bottleneck blocks
         # First block: 64 → 64 planes (256 output channels), stride=1 (no downsampling yet)
         # Remaining blocks: 256 → 64 planes (256 output channels)
-        self.conv2 = nn.Sequential(
-            BottleneckBlock(64, 64, stride=1,  # No stride here, already 56×56
-                          use_prelu=use_prelu, use_builtin_conv=use_builtin_conv, prelu_channel_wise=prelu_channel_wise, bn_momentum=bn_momentum),
-            *[BottleneckBlock(256, 64, stride=1,
-                            use_prelu=use_prelu, use_builtin_conv=use_builtin_conv, prelu_channel_wise=prelu_channel_wise, bn_momentum=bn_momentum)
-              for i in range(2)]  # Stays 56×56
-        )
+        conv2_blocks = []
+        conv2_blocks.append(BottleneckBlock(64, 64, stride=1,
+                          use_prelu=use_prelu, use_builtin_conv=use_builtin_conv, prelu_channel_wise=prelu_channel_wise, bn_momentum=bn_momentum, drop_path=drop_rates[block_idx]))
+        block_idx += 1
+        for _ in range(2):
+            conv2_blocks.append(BottleneckBlock(256, 64, stride=1,
+                            use_prelu=use_prelu, use_builtin_conv=use_builtin_conv, prelu_channel_wise=prelu_channel_wise, bn_momentum=bn_momentum, drop_path=drop_rates[block_idx]))
+            block_idx += 1
+        self.conv2 = nn.Sequential(*conv2_blocks)  # Stays 56×56
 
         # conv3_x: 4 bottleneck blocks
         # First block: 256 → 128 planes (512 output channels), stride=2 for downsampling
         # Remaining blocks: 512 → 128 planes (512 output channels)
-        self.conv3 = nn.Sequential(
-            BottleneckBlock(256, 128, stride=2,  # 56×56 → 28×28
-                          use_prelu=use_prelu, use_builtin_conv=use_builtin_conv, prelu_channel_wise=prelu_channel_wise, bn_momentum=bn_momentum),
-            *[BottleneckBlock(512, 128, stride=1,
-                            use_prelu=use_prelu, use_builtin_conv=use_builtin_conv, prelu_channel_wise=prelu_channel_wise, bn_momentum=bn_momentum)
-              for i in range(3)]  # Stays 28×28
-        )
+        conv3_blocks = []
+        conv3_blocks.append(BottleneckBlock(256, 128, stride=2,  # 56×56 → 28×28
+                          use_prelu=use_prelu, use_builtin_conv=use_builtin_conv, prelu_channel_wise=prelu_channel_wise, bn_momentum=bn_momentum, drop_path=drop_rates[block_idx]))
+        block_idx += 1
+        for _ in range(3):
+            conv3_blocks.append(BottleneckBlock(512, 128, stride=1,
+                            use_prelu=use_prelu, use_builtin_conv=use_builtin_conv, prelu_channel_wise=prelu_channel_wise, bn_momentum=bn_momentum, drop_path=drop_rates[block_idx]))
+            block_idx += 1
+        self.conv3 = nn.Sequential(*conv3_blocks)  # Stays 28×28
 
         # conv4_x: 6 bottleneck blocks
         # First block: 512 → 256 planes (1024 output channels), stride=2 for downsampling
         # Remaining blocks: 1024 → 256 planes (1024 output channels)
-        self.conv4 = nn.Sequential(
-            BottleneckBlock(512, 256, stride=2,  # 28×28 → 14×14
-                          use_prelu=use_prelu, use_builtin_conv=use_builtin_conv, prelu_channel_wise=prelu_channel_wise, bn_momentum=bn_momentum),
-            *[BottleneckBlock(1024, 256, stride=1,
-                            use_prelu=use_prelu, use_builtin_conv=use_builtin_conv, prelu_channel_wise=prelu_channel_wise, bn_momentum=bn_momentum)
-              for i in range(5)]  # Stays 14×14
-        )
+        conv4_blocks = []
+        conv4_blocks.append(BottleneckBlock(512, 256, stride=2,  # 28×28 → 14×14
+                          use_prelu=use_prelu, use_builtin_conv=use_builtin_conv, prelu_channel_wise=prelu_channel_wise, bn_momentum=bn_momentum, drop_path=drop_rates[block_idx]))
+        block_idx += 1
+        for _ in range(5):
+            conv4_blocks.append(BottleneckBlock(1024, 256, stride=1,
+                            use_prelu=use_prelu, use_builtin_conv=use_builtin_conv, prelu_channel_wise=prelu_channel_wise, bn_momentum=bn_momentum, drop_path=drop_rates[block_idx]))
+            block_idx += 1
+        self.conv4 = nn.Sequential(*conv4_blocks)  # Stays 14×14
 
         # conv5_x: 3 bottleneck blocks
         # First block: 1024 → 512 planes (2048 output channels), stride=2 for downsampling
         # Remaining blocks: 2048 → 512 planes (2048 output channels)
-        self.conv5 = nn.Sequential(
-            BottleneckBlock(1024, 512, stride=2,  # 14×14 → 7×7
-                          use_prelu=use_prelu, use_builtin_conv=use_builtin_conv, prelu_channel_wise=prelu_channel_wise, bn_momentum=bn_momentum),
-            *[BottleneckBlock(2048, 512, stride=1,
-                            use_prelu=use_prelu, use_builtin_conv=use_builtin_conv, prelu_channel_wise=prelu_channel_wise, bn_momentum=bn_momentum)
-              for i in range(2)]  # Stays 7×7
-        )
+        conv5_blocks = []
+        conv5_blocks.append(BottleneckBlock(1024, 512, stride=2,  # 14×14 → 7×7
+                          use_prelu=use_prelu, use_builtin_conv=use_builtin_conv, prelu_channel_wise=prelu_channel_wise, bn_momentum=bn_momentum, drop_path=drop_rates[block_idx]))
+        block_idx += 1
+        for _ in range(2):
+            conv5_blocks.append(BottleneckBlock(2048, 512, stride=1,
+                            use_prelu=use_prelu, use_builtin_conv=use_builtin_conv, prelu_channel_wise=prelu_channel_wise, bn_momentum=bn_momentum, drop_path=drop_rates[block_idx]))
+            block_idx += 1
+        self.conv5 = nn.Sequential(*conv5_blocks)  # Stays 7×7
 
         # Global Average Pooling (standard ResNet-50)
         # Transforms: (batch, 2048, 7, 7) → (batch, 2048, 1, 1)
@@ -955,10 +1026,11 @@ class CNNTrainer(Trainer):
     """Custom trainer for CNN models with gradient anomaly logging."""
 
     def __init__(self, *args, error_log_path="gradient_anomalies.log",
-                 logging_thresholds=None, **kwargs):
+                 logging_thresholds=None, train_sampler=None, **kwargs):
         super().__init__(*args, **kwargs)
         self.error_log_path = error_log_path
         self.last_loss = None
+        self.custom_train_sampler = train_sampler  # For Repeated Augmentation
 
         # Logging thresholds - can be configured from training script
         default_thresholds = {
@@ -1017,6 +1089,12 @@ class CNNTrainer(Trainer):
             f.write("=" * 100 + "\n")
             f.write("GRADIENT ANOMALY LOG\n")
             f.write("=" * 100 + "\n\n")
+
+    def _get_train_sampler(self):
+        """Override to use custom sampler (e.g., RepeatAugSampler for repeated augmentation)."""
+        if self.custom_train_sampler is not None:
+            return self.custom_train_sampler
+        return super()._get_train_sampler()
 
     def _log_anomaly(self, step, message, details=None):
         """Log anomaly to error log file."""

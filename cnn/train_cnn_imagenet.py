@@ -5,7 +5,6 @@ import torch
 from datasets import load_from_disk, load_dataset, Dataset
 from transformers import TrainingArguments
 import torchvision.transforms as T
-import torchvision.transforms.v2 as T2
 import random
 from torch.utils.data import default_collate
 import argparse
@@ -15,6 +14,9 @@ from torch.utils.tensorboard import SummaryWriter
 from shared_utils import ModelTrainer, find_latest_checkpoint
 
 from prelu_cnn import CNN, CNNTrainer
+from timm.data.mixup import Mixup
+from timm.data.auto_augment import rand_augment_transform
+from timm.data.distributed_sampler import RepeatAugSampler
 
 from PIL import Image, ImageFile
 import warnings
@@ -25,104 +27,93 @@ ImageFile.LOAD_TRUNCATED_IMAGES = True
 warnings.filterwarnings("ignore", category=UserWarning, module="PIL.TiffImagePlugin")
 warnings.filterwarnings("ignore", message="Corrupt EXIF data")
 
-class CutMixCollator:
+class MixupCutmixCollator:
     """
-    Custom collate function that applies CutMix augmentation at the batch level.
-    
-    CutMix is a regularization strategy that:
-    1. Cuts rectangular patches from one image
-    2. Pastes them onto another image in the same batch
-    3. Mixes labels proportionally based on the area of the patch
-    
-    Why CutMix is effective:
-    - Forces model to learn from partial views (unlike MixUp which blends entire images)
-    - Improves localization ability - model must identify objects from fragments
-    - Provides stronger regularization than dropout or standard augmentation
+    Custom collate function that applies MixUp and/or CutMix augmentation at the batch level
+    using timm's battle-tested Mixup implementation.
+
+    MixUp: Blends entire images and labels (img = λ*img1 + (1-λ)*img2)
+    CutMix: Cuts rectangular patches from one image and pastes onto another
+
+    When both are enabled, randomly switches between them based on switch_prob.
+
+    Why these augmentations are effective:
+    - MixUp: Smoother decision boundaries, better calibration, linear behavior between classes
+    - CutMix: Forces model to learn from partial views, improves localization
+    - Combined: Complementary regularization - MixUp for global mixing, CutMix for local mixing
     - Empirically improves ImageNet top-1 accuracy by 1-2%
-    
-    Applied at batch level because:
-    - Requires pairs of images to mix
-    - More efficient than image-level augmentation
-    - Allows consistent mixing ratio across the batch
     """
-    
-    def __init__(self, num_classes=1000, alpha=1.0, prob=0.5):
+
+    def __init__(
+        self,
+        mixup_alpha=0.8,
+        cutmix_alpha=1.0,
+        prob=1.0,
+        switch_prob=0.5,
+        mode='batch',
+        label_smoothing=0.1,
+        num_classes=1000
+    ):
         """
         Args:
-            num_classes: Number of classes for one-hot encoding
-            alpha: Beta distribution parameter controlling the size of cut patches.
-                   
-                   The mixing ratio λ is sampled from Beta(alpha, alpha):
-                   - λ determines what fraction of the image to keep (1-λ is fraction replaced)
-                   - Patch area = (1-λ) * image_area
-                   
-                   How alpha affects the distribution:
-                   
-                   alpha = 1.0 (default):
-                   - Beta(1,1) = Uniform(0,1) distribution
-                   - Equal probability for all patch sizes (0% to 100% of image)
-                   - Most diverse training - can get tiny patches or nearly full replacement
-                   - Example: λ could be 0.1 (90% replaced), 0.5 (50% replaced), or 0.9 (10% replaced) with equal probability
-                   
-                   alpha = 0.2 (more extreme):
-                   - Beta(0.2, 0.2) is U-shaped - biased toward 0 or 1
-                   - Tends to either replace almost nothing OR almost everything
-                   - More aggressive augmentation - creates very easy or very hard samples
-                   - Example: λ likely to be <0.1 (>90% replaced) or >0.9 (<10% replaced)
-                   
-                   alpha = 2.0 (more moderate):
-                   - Beta(2,2) is bell-shaped - biased toward 0.5
-                   - Tends to replace around 40-60% of the image
-                   - More conservative - consistent difficulty level
-                   - Example: λ clusters around 0.5 (roughly half the image replaced)
-                   
-                   alpha = 5.0 (very moderate):
-                   - Beta(5,5) is strongly peaked at 0.5
-                   - Almost always replaces 40-60% of the image
-                   - Very predictable augmentation strength
-                   - Less diversity in training samples
-                   
-                   Recommended values:
-                   - alpha=1.0: Good default, maximum diversity
-                   - alpha=0.5-0.8: If model struggles with training stability
-                   - alpha=1.5-2.0: If model overfits and needs consistent regularization
-                   
-            prob: Probability of applying CutMix to a batch
+            mixup_alpha: Beta distribution parameter for MixUp. Higher = more mixing.
+                         Set to 0 to disable MixUp. Default 0.8 (timm standard).
+            cutmix_alpha: Beta distribution parameter for CutMix patch sizes.
+                          Set to 0 to disable CutMix. Default 1.0 (uniform patch sizes).
+            prob: Probability of applying either augmentation to a batch.
+                  Default 1.0 (always apply one of them).
+            switch_prob: Probability of selecting CutMix over MixUp when both are active.
+                         Default 0.5 (equal chance of each).
+            mode: How to apply mixing:
+                  - 'batch': Same mixing params for entire batch (fastest)
+                  - 'pair': Different params per image pair
+                  - 'elem': Different params per element (most diverse)
+            label_smoothing: Label smoothing applied to mixed targets.
+                             Set to 0.0 if using Trainer's label_smoothing_factor.
+            num_classes: Number of classes for one-hot encoding.
         """
-        self.cutmix = T2.CutMix(num_classes=num_classes, alpha=alpha)
-        self.prob = prob
+        self.mixup_enabled = mixup_alpha > 0 or cutmix_alpha > 0
+
+        if self.mixup_enabled:
+            self.mixup_fn = Mixup(
+                mixup_alpha=mixup_alpha,
+                cutmix_alpha=cutmix_alpha,
+                prob=prob,
+                switch_prob=switch_prob,
+                mode=mode,
+                label_smoothing=label_smoothing,
+                num_classes=num_classes
+            )
+        else:
+            self.mixup_fn = None
+
         self.num_classes = num_classes
-        
+
     def __call__(self, batch):
         """
-        Collate function that creates a batch and optionally applies CutMix.
-        
+        Collate function that creates a batch and applies MixUp/CutMix.
+
         Args:
             batch: List of examples from the dataset
-        
+
         Returns:
-            Dict with batched tensors, potentially with CutMix applied
+            Dict with batched tensors, with MixUp/CutMix applied if enabled
         """
         # First, use default collate to create standard batch tensors
         batch_dict = default_collate(batch)
-        
-        # Only apply CutMix during training with specified probability
-        # Skip CutMix if labels are already mixed (from previous CutMix application)
-        if random.random() < self.prob and len(batch_dict['labels'].shape) == 1:
-            # CutMix returns:
-            # - Mixed images with rectangular patches swapped
-            # - One-hot encoded mixed labels (soft labels for mixed classes)
-            mixed_images, mixed_labels = self.cutmix(
-                batch_dict['pixel_values'], 
+
+        # Apply MixUp/CutMix if enabled
+        if self.mixup_fn is not None:
+            # timm's Mixup expects (images, targets) and returns (mixed_images, mixed_targets)
+            # mixed_targets are one-hot encoded with mixing applied
+            mixed_images, mixed_labels = self.mixup_fn(
+                batch_dict['pixel_values'],
                 batch_dict['labels']
             )
-            
+
             batch_dict['pixel_values'] = mixed_images
             batch_dict['labels'] = mixed_labels
-            
-            # Note: HuggingFace Trainer will automatically handle one-hot labels
-            # The loss function will compute cross-entropy with soft targets
-        
+
         return batch_dict
 
 class SafeImageNetDataset(Dataset):
@@ -324,12 +315,44 @@ def main():
     mean = [0.485, 0.456, 0.406]
     std  = [0.229, 0.224, 0.225]
     
-    # Data augmentation parameters
-    randaugment_ops = 2
-    randaugment_magnitude = 7
-    random_erasing_prob = 0.1
-    cutmix_alpha = 1.0
-    cutmix_prob = 0.0  # Disabled - CutMix creates mixed labels (e.g., 60% cat + 40% dog) that make optimization harder
+    # Data augmentation parameters (DeiT-B recipe)
+    random_erasing_prob = 0.25  # DeiT-B uses 0.25
+
+    # Repeated Augmentation (DeiT-B uses this)
+    # Each image is repeated N times in the epoch, each with different augmentation.
+    # This increases augmentation diversity without loading more unique images.
+    # Standard value is 3 repeats.
+    num_aug_repeats = 3
+
+    # RandAugment "9/0.5" from DeiT-B:
+    #   9 = magnitude (intensity of transforms, scale 0-10)
+    #   0.5 = mstd (magnitude std - adds Gaussian noise to magnitude per-transform)
+    # Using timm's implementation to get mstd support
+    randaug_config = 'rand-m9-mstd0.5'
+    randaug_hparams = {'img_mean': tuple([int(x * 255) for x in mean])}
+    randaug_transform = rand_augment_transform(randaug_config, randaug_hparams)
+
+    # MixUp/CutMix parameters (timm defaults for ImageNet)
+    #
+    # Both augmentations sample a mixing ratio λ from Beta(alpha, alpha) distribution:
+    #   - MixUp:  blended_img = λ * img_a + (1-λ) * img_b
+    #   - CutMix: paste (1-λ) area from img_b onto img_a
+    #   - Labels: soft_label = λ * label_a + (1-λ) * label_b
+    #
+    # How alpha affects the Beta distribution of λ:
+    #   alpha = 0.2: U-shaped, λ near 0 or 1 (mostly one image dominates)
+    #   alpha = 0.8: Mild mixing, λ biased toward edges but smoother than 0.2
+    #   alpha = 1.0: Uniform [0,1], any mixing ratio equally likely
+    #   alpha = 2.0: Bell-shaped, λ clusters around 0.5 (always ~50/50 mix)
+    #
+    mixup_alpha = 0.8       # timm default for MixUp. Lower = less blending on average
+    cutmix_alpha = 1.0      # timm default for CutMix. 1.0 = uniform patch sizes
+    mix_prob = 1.0          # Probability of applying MixUp or CutMix to each batch
+    mix_switch_prob = 0.5   # When both enabled: P(CutMix) vs P(MixUp). 0.5 = equal chance
+    mix_mode = 'batch'      # 'batch': same λ for all samples (fast)
+                            # 'pair': different λ per image pair
+                            # 'elem': different λ per element (most diverse, slower)
+    mix_label_smoothing = 0.0  # Disabled here; using Trainer's label_smoothing_factor instead
 
     # Logging thresholds for anomaly detection
     # These control when warnings are logged for model internals (gradients, activations, etc.)
@@ -362,13 +385,6 @@ def main():
         'residual_growth_from_addition': 2.0,  # Combined growth from residual addition
         'residual_combined_std': 10.0,  # Absolute combined std threshold
     }
-                        # When training is already unstable (sharp minima), this compounds the problem
-                        #
-                        # Important distinction:
-                        # - Batch size noise = statistical sampling noise in gradient estimation (helps escape sharp minima)
-                        # - CutMix = deterministic augmentation that makes learning task harder (doesn't help with sharp minima)
-                        #
-                        # Re-enable (0.5) once we achieve stable training with flat minima
 
     # Define the data augmentation and preprocessing pipeline for training images
     # Augmentations are applied in order - each builds on the previous transformations
@@ -387,13 +403,12 @@ def main():
         # 3. RANDOM HORIZONTAL FLIP - Simple but effective augmentation (50% probability)
         # Why: Doubles effective dataset size, teaches left-right invariance
         # Critical for natural images where orientation doesn't matter (cat facing left = cat facing right)
-        T.RandomHorizontalFlip(),
+        #T.RandomHorizontalFlip(), ## TODO: disabled
         
-        # 4. RANDAUGMENT - AutoML-discovered augmentation policy
-        # Why: Applies 2 random ops from a set of 14 (rotation, shearing, color shifts, etc.)
-        # magnitude=9 (out of 10) is aggressive - helps regularization but may slow initial convergence
-        # This replaces manual tuning of individual augmentations
-        T.RandAugment(num_ops=randaugment_ops, magnitude=randaugment_magnitude), # TODO: magnitude=7 is reasonable but slightly lower than the standard magnitude=9-10.
+        # 4. RANDAUGMENT - AutoML-discovered augmentation policy (DeiT-B: 9/0.5)
+        # Applies 2 random ops from a set of 14 (rotation, shearing, color shifts, etc.)
+        # Using timm's implementation for mstd support (magnitude noise)
+        randaug_transform,
         
         # 5. TENSOR CONVERSION - PIL Image → Tensor, scales [0,255] → [0,1]
         # Must happen before normalize and after PIL-based augmentations
@@ -472,7 +487,7 @@ def main():
         # Why: Forces model to use context, prevents overfitting to specific features
         # p=0.1 (10% chance), scale=(0.02, 0.1) means 2-10% of image area erased
         # Applied AFTER normalization, so erased regions have random normalized values
-        T.RandomErasing(p=random_erasing_prob, scale=(0.02, 0.1)), # TODO: this is very conserative, usually T.RandomErasing(p=0.5, scale=(0.02, 0.33))
+        T.RandomErasing(p=random_erasing_prob), #scale=(0.02, 0.1)), # TODO: this is very conserative, usually T.RandomErasing(p=0.5, scale=(0.02, 0.33))
                                                                    # or more aggressive T.RandomErasing(p=0.6, scale=(0.02, 0.4))
     ])
 
@@ -530,7 +545,13 @@ def main():
     use_prelu = True # TODO: Re-enable PReLU (set to True) to prevent dying ReLU in conv5 (conv5.0 output_std=0.0245 due to ReLU killing negative values)
                        # PReLU allows negative values to pass through (scaled by alpha), preventing dead neurons
                        # Combined with ReZero scaling, this should stabilize conv5 training
-    
+
+    # Stochastic depth (DropPath) rate
+    # Reference: "Deep Networks with Stochastic Depth" (Huang et al., 2016)
+    # Drop rate increases linearly from 0 at first block to this value at last block
+    # 0.1 = 10% drop probability at the deepest block (90% survival)
+    drop_path_rate = 0.1
+
     # Create CNN model
     activation_type = "PReLU" if use_prelu else "ReLU"
     bn_momentum = 0.1  # Batch normalization momentum (lower = more stable running stats)
@@ -538,11 +559,13 @@ def main():
     print(f"\n🏗️ Creating {activation_type} CNN model ({1000} classes)...")
     print(f"🔧 Activation function: {activation_type}")
     print(f"🔧 BatchNorm momentum: {bn_momentum}")
+    print(f"🔧 Stochastic depth (drop_path_rate): {drop_path_rate}")
     model = CNN(
         use_prelu=use_prelu,
         use_builtin_conv=True,  # Use fast PyTorch convolutions
         num_classes=1000,
-        bn_momentum=bn_momentum
+        bn_momentum=bn_momentum,
+        drop_path_rate=drop_path_rate
     )
     
     # This section moved below after we determine resume status
@@ -681,23 +704,19 @@ def main():
 
     # Output directory is already set in the resume logic above
 
-    # Adjust learning rate for resume - AdamW uses much lower LRs than SGD
+    # DeiT-B learning rate formula: 0.0005 × (batch_size / 512)
+    # With batch_size=1024: lr = 0.0005 × 2 = 0.001
+    effective_batch_size = batch_size_per_gpu * grad_accum
+    initial_lr = 0.0005 * (effective_batch_size / 512)
+
+    # DeiT-B warmup: 5 epochs
+    warmup_epochs = 5
+    warmup_ratio = warmup_epochs / num_epochs  # 5/300 ≈ 0.0167
+
     if resume:
-        # When resuming with AdamW, use a moderate LR
-        initial_lr = 3e-4  # Good starting point for resumed AdamW training
-        warmup_ratio = 0.01  # Small 1% warmup for safety
-        print(f"📈 Starting resumed training with LR={initial_lr}")
-    else:
-        initial_lr = 1e-3   # Standard AdamW LR for vision models
-                            # This is the typical starting point for AdamW on ImageNet
-                            # With batch=1024, this provides good balance:
-                            # - Fast enough convergence for reasonable training time
-                            # - Stable with proper warmup (10%)
-                            # - Matches modern ImageNet training recipes
-                            # Previous value (1e-4) was overly conservative
-        warmup_ratio = 0.1  # 10% warmup for stability with higher learning rate
-                            # Longer warmup helps prevent early training instability
-                            # Critical when using higher LR like 1e-3
+        initial_lr = initial_lr * 0.3  # Reduce LR when resuming
+        warmup_ratio = 0.01  # Shorter warmup for resume
+        print(f"📈 Resumed training with reduced LR={initial_lr:.6f}")
     
     # Create training arguments
     training_args = TrainingArguments(
@@ -706,7 +725,7 @@ def main():
         per_device_train_batch_size=batch_size_per_gpu,  # Reduced for stability
         per_device_eval_batch_size=batch_size_per_gpu,
         learning_rate=initial_lr,
-        weight_decay=1e-3, # TODO: Typical ratio for WD/LR: 0.5 to 2.0 (we're at the higher end for more regularization)
+        weight_decay=0.05,  # DeiT-B uses 0.05
         warmup_ratio=warmup_ratio,  # Dynamic warmup based on resume status
         gradient_accumulation_steps=grad_accum,
         eval_steps=1,
@@ -796,23 +815,14 @@ def main():
         # Momentum just adds inertia: keep μ of last velocity (useful when directions persist, otherwise it resists),
         # then take the same downhill step −η ∇f(θ_t).
 
-        max_grad_norm=5.0,  # Tighter clipping to prevent gradient explosion
-                            # Clips gradient norm to max value of 0.5 (reduced from 1.0)
-                            # This prevents the wild loss spikes visible in TensorBoard
-                            # Trade-off: too tight (e.g., 0.1) slows convergence; 0.5 provides more stability
-                            # TODO: consider removing entirely if this is stable
-        lr_scheduler_type="cosine_with_min_lr",  # Cosine annealing with minimum LR
-        lr_scheduler_kwargs={
-            "min_lr_rate": 0.30,  # Minimum LR as ratio of initial LR (% of initial)
-            # Cosine annealing with min_lr:
-            # - Learning rate follows a single cosine curve from initial_lr to min_lr
-            # - min_lr = initial_lr * min_lr_ratio
-            # - lr = min_lr + (initial_lr - min_lr) * (1 + cos(π * t/T)) / 2
-            #   where t = current step, T = total steps
-            # - Smooth decay without restarts
-            # - min_lr_ratio prevents learning rate from going to zero, maintaining some gradient flow
-            # - Common values: 0.01 (1%), 0.001 (0.1%), or 0.1 (10%)
-        },
+        max_grad_norm=None,  # DeiT-B disables gradient clipping
+        lr_scheduler_type="cosine",  # DeiT-B uses cosine decay to 0
+        # Alternative: cosine with minimum LR floor
+        # lr_scheduler_type="cosine_with_min_lr",
+        # lr_scheduler_kwargs={
+        #     "min_lr_rate": 0.30,  # Minimum LR as ratio of initial LR (% of initial)
+        #     # lr = min_lr + (initial_lr - min_lr) * (1 + cos(π * t/T)) / 2
+        # },
         eval_strategy="epoch",
         save_strategy="epoch",
         logging_strategy="steps",
@@ -822,8 +832,7 @@ def main():
         greater_is_better=False,
         prediction_loss_only=False,
         label_names=["labels"], # need this to get eval_loss
-        label_smoothing_factor=0.05,  # Label smoothing for regularization
-                                      # TODO: 0.05 is conservative, 0.1 is more standard
+        label_smoothing_factor=0.1,  # DeiT-B uses 0.1
         report_to="tensorboard" if not disable_logging else "none",
     )
 
@@ -867,12 +876,16 @@ def main():
     print(f"  Logging directory: {training_args.logging_dir}")
     print(f"  Report to: {training_args.report_to}")
     
-    # Create CutMix collator for training
+    # Create MixUp/CutMix collator for training
     # Only used during training - evaluation uses default collation
-    cutmix_collator = CutMixCollator(
-        num_classes=1000,      # ImageNet has 1000 classes
-        alpha=cutmix_alpha,    # Beta distribution parameter for patch size control
-        prob=cutmix_prob       # Probability of applying CutMix to batches
+    mixup_cutmix_collator = MixupCutmixCollator(
+        mixup_alpha=mixup_alpha,
+        cutmix_alpha=cutmix_alpha,
+        prob=mix_prob,
+        switch_prob=mix_switch_prob,
+        mode=mix_mode,
+        label_smoothing=mix_label_smoothing,
+        num_classes=1000
     )
     
     # Create trainer using ModelTrainer
@@ -883,17 +896,23 @@ def main():
     error_log_path = os.path.join(output_dir, "gradient_anomalies.log")
     print(f"📝 Gradient anomaly log: {error_log_path}")
 
+    # Create Repeated Augmentation sampler (DeiT-B)
+    # This repeats each sample N times per epoch with different augmentations
+    repeat_aug_sampler = RepeatAugSampler(train_dataset, num_repeats=num_aug_repeats)
+    print(f"🔄 Repeated Augmentation: {num_aug_repeats}x repeats per image")
+
     trainer = ModelTrainer(
         model=model,
         training_args=training_args,
         train_dataset=train_dataset,
         eval_dataset=eval_dataset,
         trainer_class=CNNTrainer,
-        data_collator=cutmix_collator,  # Add CutMix collator for batch-level augmentation
+        data_collator=mixup_cutmix_collator,  # MixUp/CutMix augmentation at batch level
         resume_from_checkpoint=None,  # Don't resume trainer state - we loaded weights manually
         trainer_kwargs={
             "error_log_path": error_log_path,  # Pass error log path for gradient anomaly tracking
             "logging_thresholds": logging_thresholds,  # Pass configurable logging thresholds
+            "train_sampler": repeat_aug_sampler,  # Repeated augmentation sampler
         },
     )
     
@@ -909,6 +928,7 @@ def main():
             'model/total_params': total_params,
             'model/trainable_params': trainable_params,
             'model/bn_momentum': bn_momentum,
+            'model/drop_path_rate': drop_path_rate,
 
             # Training configuration
             'training/epochs': training_args.num_train_epochs,
@@ -936,8 +956,10 @@ def main():
             'scheduler/type': training_args.lr_scheduler_type,
 
             # Data augmentation
+            'augmentation/mixup_alpha': mixup_alpha,
             'augmentation/cutmix_alpha': cutmix_alpha,
-            'augmentation/cutmix_prob': cutmix_prob,
+            'augmentation/mix_prob': mix_prob,
+            'augmentation/mix_switch_prob': mix_switch_prob,
             'augmentation/randaugment_ops': randaugment_ops,
             'augmentation/randaugment_magnitude': randaugment_magnitude,
             'augmentation/random_erasing_prob': random_erasing_prob,
