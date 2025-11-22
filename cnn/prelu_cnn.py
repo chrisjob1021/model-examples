@@ -1092,11 +1092,11 @@ class CNNTrainer(Trainer):
                 f.write("GRADIENT ANOMALY LOG\n")
                 f.write("=" * 100 + "\n\n")
 
-    def _get_train_sampler(self):
+    def _get_train_sampler(self, dataset=None):
         """Override to use custom sampler (e.g., RepeatAugSampler for repeated augmentation)."""
         if self.custom_train_sampler is not None:
             return self.custom_train_sampler
-        return super()._get_train_sampler()
+        return super()._get_train_sampler(dataset)
 
     def _log_anomaly(self, step, message, details=None):
         """Log anomaly to error log file."""

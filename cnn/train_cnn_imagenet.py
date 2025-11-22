@@ -900,8 +900,37 @@ def main():
 
     # Create Repeated Augmentation sampler (DeiT-B)
     # This repeats each sample N times per epoch with different augmentations
-    repeat_aug_sampler = RepeatAugSampler(train_dataset, num_repeats=num_aug_repeats)
-    print(f"🔄 Repeated Augmentation: {num_aug_repeats}x repeats per image")
+    # Note: RepeatAugSampler requires distributed training, so we only use it if available
+    import torch.distributed as dist
+    
+    # Create a simple repeating sampler for single-GPU training
+    class SimpleRepeatSampler:
+        """Simple sampler that repeats each sample N times, shuffled."""
+        def __init__(self, dataset, num_repeats):
+            self.dataset = dataset
+            self.num_repeats = num_repeats
+            self.length = len(dataset) * num_repeats
+        
+        def __iter__(self):
+            indices = list(range(len(self.dataset))) * self.num_repeats
+            random.shuffle(indices)
+            return iter(indices)
+        
+        def __len__(self):
+            return self.length
+    
+    # Use RepeatAugSampler only if distributed training is initialized
+    try:
+        if dist.is_initialized():
+            repeat_aug_sampler = RepeatAugSampler(train_dataset, num_repeats=num_aug_repeats)
+            print(f"🔄 Repeated Augmentation: {num_aug_repeats}x repeats per image (distributed)")
+        else:
+            repeat_aug_sampler = SimpleRepeatSampler(train_dataset, num_repeats=num_aug_repeats)
+            print(f"🔄 Repeated Augmentation: {num_aug_repeats}x repeats per image (single-GPU)")
+    except (ValueError, RuntimeError):
+        # Fallback if distributed check fails (e.g., process group not initialized)
+        repeat_aug_sampler = SimpleRepeatSampler(train_dataset, num_repeats=num_aug_repeats)
+        print(f"🔄 Repeated Augmentation: {num_aug_repeats}x repeats per image (single-GPU, fallback)")
 
     trainer = ModelTrainer(
         model=model,
