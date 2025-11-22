@@ -960,8 +960,8 @@ def main():
             'augmentation/cutmix_alpha': cutmix_alpha,
             'augmentation/mix_prob': mix_prob,
             'augmentation/mix_switch_prob': mix_switch_prob,
-            'augmentation/randaugment_ops': randaugment_ops,
-            'augmentation/randaugment_magnitude': randaugment_magnitude,
+            # 'augmentation/randaugment_ops': randaugment_ops,
+            # 'augmentation/randaugment_magnitude': randaugment_magnitude,
             'augmentation/random_erasing_prob': random_erasing_prob,
 
             # Logging thresholds
