@@ -1082,13 +1082,15 @@ class CNNTrainer(Trainer):
         self.residual_stats = {}
         self.residual_hooks_installed = False
 
-        # Initialize error log file
-        import os
-        os.makedirs(os.path.dirname(error_log_path) if os.path.dirname(error_log_path) else ".", exist_ok=True)
-        with open(error_log_path, 'w') as f:
-            f.write("=" * 100 + "\n")
-            f.write("GRADIENT ANOMALY LOG\n")
-            f.write("=" * 100 + "\n\n")
+        # Initialize error log file (if enabled)
+        self.gradient_logging_enabled = error_log_path is not None
+        if self.gradient_logging_enabled:
+            import os
+            os.makedirs(os.path.dirname(error_log_path) if os.path.dirname(error_log_path) else ".", exist_ok=True)
+            with open(error_log_path, 'w') as f:
+                f.write("=" * 100 + "\n")
+                f.write("GRADIENT ANOMALY LOG\n")
+                f.write("=" * 100 + "\n\n")
 
     def _get_train_sampler(self):
         """Override to use custom sampler (e.g., RepeatAugSampler for repeated augmentation)."""
@@ -1098,6 +1100,9 @@ class CNNTrainer(Trainer):
 
     def _log_anomaly(self, step, message, details=None):
         """Log anomaly to error log file."""
+        if not self.gradient_logging_enabled:
+            return
+
         import datetime
         timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 

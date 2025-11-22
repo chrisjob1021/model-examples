@@ -891,10 +891,12 @@ def main():
     # Create trainer using ModelTrainer
     print(f"\n🏋️ Setting up trainer...")
 
-    # Set up error log path for gradient anomaly tracking
+    # Gradient anomaly logging (disable for cleaner training)
+    enable_gradient_logging = False
     import os
-    error_log_path = os.path.join(output_dir, "gradient_anomalies.log")
-    print(f"📝 Gradient anomaly log: {error_log_path}")
+    error_log_path = os.path.join(output_dir, "gradient_anomalies.log") if enable_gradient_logging else None
+    if enable_gradient_logging:
+        print(f"📝 Gradient anomaly log: {error_log_path}")
 
     # Create Repeated Augmentation sampler (DeiT-B)
     # This repeats each sample N times per epoch with different augmentations
