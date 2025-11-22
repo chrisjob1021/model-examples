@@ -318,11 +318,11 @@ def main():
     # Data augmentation parameters (DeiT-B recipe)
     random_erasing_prob = 0.25  # DeiT-B uses 0.25
 
-    # Repeated Augmentation (DeiT-B uses this)
+    # Repeated Augmentation (DeiT-B uses 3x)
     # Each image is repeated N times in the epoch, each with different augmentation.
-    # This increases augmentation diversity without loading more unique images.
-    # Standard value is 3 repeats.
-    num_aug_repeats = 3
+    # Disabled (1x) for faster training - already have strong augmentation
+    # Set to 3 for DeiT-B recipe, but adds 3x training time
+    num_aug_repeats = 1  # 1 = disabled, 3 = DeiT-B default
 
     # RandAugment "9/0.5" from DeiT-B:
     #   9 = magnitude (intensity of transforms, scale 0-10)
@@ -560,13 +560,23 @@ def main():
     print(f"🔧 Activation function: {activation_type}")
     print(f"🔧 BatchNorm momentum: {bn_momentum}")
     print(f"🔧 Stochastic depth (drop_path_rate): {drop_path_rate}")
+
+    # Gradient checkpointing: trades compute for memory
+    # Recomputes activations during backward pass instead of storing them
+    # Reduces memory ~50-70%, allowing larger batch sizes
+    # Cost: ~20-30% slower per step, but larger batches = fewer steps overall
+    use_gradient_checkpointing = True
+
     model = CNN(
         use_prelu=use_prelu,
         use_builtin_conv=True,  # Use fast PyTorch convolutions
         num_classes=1000,
         bn_momentum=bn_momentum,
-        drop_path_rate=drop_path_rate
+        drop_path_rate=drop_path_rate,
+        gradient_checkpointing=use_gradient_checkpointing
     )
+    if use_gradient_checkpointing:
+        print(f"🔧 Gradient checkpointing: enabled (saves ~50% memory)")
     
     # This section moved below after we determine resume status
     
@@ -603,19 +613,11 @@ def main():
     print(f"  Total parameters: {total_params:,}")
     print(f"  Trainable parameters: {trainable_params:,}")
     
-    batch_size_per_gpu = 256
-    grad_accum = 4          
-                                # Why not larger batches (e.g., 2048)?
-                                # SHARP VS FLAT MINIMA:
-                                # - Large batches: compute accurate gradients → go straight downhill → find nearest steep valley (sharp minimum)
-                                # - Small batches: noisy gradients → bounce around → skip sharp valleys → settle in wide basins (flat minimum)
-                                #
-                                # Why sharp minima are bad:
-                                # 1. Generalization: Test data slightly differs from train data. In sharp minimum, small perturbations cause huge loss spikes
-                                # 2. Instability: Balanced on knife edge - any LR spike or gradient perturbation kicks you out → those loss spikes in TensorBoard
-                                # 3. Train/eval gap: Model memorized training data's path to sharp valley, but test data falls off the cliff
-                                #
-                                # Batch 1024 provides good balance: stable gradients + enough noise to find flat, generalizable minima
+    # With gradient checkpointing enabled, we can fit larger batches
+    # Try 512 per GPU with grad_accum=2 for effective batch 1024
+    # If OOM, reduce to 384 or back to 256
+    batch_size_per_gpu = 512
+    grad_accum = 2  # Fewer accumulation steps = faster training
     
     # Check if we want to resume from a checkpoint
     base_output_dir = f"./results/cnn_results_{'prelu' if use_prelu else 'relu'}"
@@ -636,7 +638,7 @@ def main():
     # Configure training based on whether we're resuming
     if resume:
         # Extended training configuration when resuming
-        num_epochs = 300
+        num_epochs = 100
         output_dir = f"./results/cnn_resumed_{'prelu' if use_prelu else 'relu'}"
         
         # Load model weights ONLY (not optimizer/scheduler state)
@@ -665,7 +667,8 @@ def main():
             raise FileNotFoundError(f"Could not find model weights in {checkpoint_path}")
     else:
         # Original training configuration
-        num_epochs = 300
+        # 100 epochs is standard for ResNet-50 (300 is for ViT/DeiT)
+        num_epochs = 100
         output_dir = base_output_dir
         print(f"🆕 Starting fresh training for {num_epochs} epochs")
         print(f"   Output directory: {output_dir}") 

@@ -19,6 +19,7 @@ import warnings
 from torch.optim.lr_scheduler import _LRScheduler
 from typing import Optional
 from timm.layers import DropPath  # Stochastic depth implementation
+from torch.utils.checkpoint import checkpoint  # Gradient checkpointing
 
 class ConvAct(nn.Module):
     def __init__(self, in_channels, out_channels, kernel_size, stride=1, padding=0, use_prelu=False, use_builtin_conv=False, prelu_channel_wise=True, bn_momentum=0.1):
@@ -530,11 +531,12 @@ class CNN(nn.Module):
         Only used when use_prelu=True. Defaults to ``True``.
     """
 
-    def __init__(self, use_prelu: bool = False, *, use_builtin_conv: bool = True, prelu_channel_wise: bool = True, num_classes: int = 1000, bn_momentum: float = 0.1, drop_path_rate: float = 0.0):
+    def __init__(self, use_prelu: bool = False, *, use_builtin_conv: bool = True, prelu_channel_wise: bool = True, num_classes: int = 1000, bn_momentum: float = 0.1, drop_path_rate: float = 0.0, gradient_checkpointing: bool = False):
         super().__init__()
         self.num_classes = num_classes
         self.bn_momentum = bn_momentum
         self.drop_path_rate = drop_path_rate
+        self.gradient_checkpointing = gradient_checkpointing
 
         # Warn if using slow manual convolutions
         if not use_builtin_conv:
@@ -676,12 +678,48 @@ class CNN(nn.Module):
             input_tensor = kwargs.get('pixel_values')
             if input_tensor is None:
                 raise ValueError("No input tensor provided. Expected 'x' or 'pixel_values' argument.")
-                
+
         x = self.conv1(input_tensor)
-        x = self.conv2(x)
-        x = self.conv3(x)
-        x = self.conv4(x)
-        x = self.conv5(x)
+
+        # Gradient Checkpointing
+        #
+        # PROBLEM: During backprop, PyTorch needs activations from the forward pass
+        # to compute gradients. Normally these are stored in memory:
+        #
+        #   Forward:  x → conv2 → a2 → conv3 → a3 → conv4 → a4 → conv5 → output
+        #                        ↑          ↑          ↑
+        #                   [stored]   [stored]   [stored]  ← Uses ~30GB for ResNet-50
+        #
+        # SOLUTION: Don't store activations. Recompute them during backward pass:
+        #
+        #   Forward:  x → conv2 → conv3 → conv4 → conv5 → output
+        #                (activations discarded, only output kept)
+        #
+        #   Backward: When we need a3 to compute grad for conv4:
+        #             1. Re-run forward from last checkpoint: conv3(a2) → a3
+        #             2. Use a3 to compute gradient
+        #             3. Discard a3 again
+        #
+        # TRADE-OFF:
+        #   Memory: ~50-70% reduction (only store checkpoint boundaries, not all activations)
+        #   Compute: ~20-30% slower (each segment's forward pass runs twice)
+        #
+        # WHY IT'S WORTH IT:
+        #   - Memory savings allow 2x larger batch sizes
+        #   - 2x batch = 2x fewer optimizer steps = ~40% faster overall
+        #   - Net effect: faster training despite recomputation overhead
+        #
+        # use_reentrant=False: Newer, safer implementation that works with autograd
+        if self.gradient_checkpointing and self.training:
+            x = checkpoint(self.conv2, x, use_reentrant=False)
+            x = checkpoint(self.conv3, x, use_reentrant=False)
+            x = checkpoint(self.conv4, x, use_reentrant=False)
+            x = checkpoint(self.conv5, x, use_reentrant=False)
+        else:
+            x = self.conv2(x)
+            x = self.conv3(x)
+            x = self.conv4(x)
+            x = self.conv5(x)
 
         # Apply global average pooling and flatten
         x = self.avgpool(x)  # (batch, 2048, 1, 1)
