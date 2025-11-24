@@ -742,6 +742,7 @@ def main():
                                                 # IMPORTANT: it looks we were getting oom-killed leaving these alive on a 128GB mem system
         dataloader_pin_memory=True,     # If True, the DataLoader will copy Tensors into CUDA pinned memory before returning them.
                                         # This can speed up host-to-GPU transfer, especially for large batches.
+        dataloader_drop_last=True,      # Drop last incomplete batch - required for MixUp/CutMix which needs even batch sizes
 
         # Mixed precision training for 2-3x speedup and 50% memory reduction
         # BF16 (bfloat16): More stable, no loss scaling needed, available on Ampere+ GPUs (A100, H100, RTX 30/40)
@@ -818,7 +819,7 @@ def main():
         # Momentum just adds inertia: keep μ of last velocity (useful when directions persist, otherwise it resists),
         # then take the same downhill step −η ∇f(θ_t).
 
-        max_grad_norm=None,  # DeiT-B disables gradient clipping
+        max_grad_norm=100.0,  # High threshold for grad stats logging without aggressive clipping
         lr_scheduler_type="cosine",  # DeiT-B uses cosine decay to 0
         # Alternative: cosine with minimum LR floor
         # lr_scheduler_type="cosine_with_min_lr",
