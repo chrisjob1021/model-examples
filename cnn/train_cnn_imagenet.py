@@ -403,7 +403,7 @@ def main():
         # 3. RANDOM HORIZONTAL FLIP - Simple but effective augmentation (50% probability)
         # Why: Doubles effective dataset size, teaches left-right invariance
         # Critical for natural images where orientation doesn't matter (cat facing left = cat facing right)
-        #T.RandomHorizontalFlip(), ## TODO: disabled
+        T.RandomHorizontalFlip(),
         
         # 4. RANDAUGMENT - AutoML-discovered augmentation policy (DeiT-B: 9/0.5)
         # Applies 2 random ops from a set of 14 (rotation, shearing, color shifts, etc.)
@@ -707,10 +707,54 @@ def main():
 
     # Output directory is already set in the resume logic above
 
-    # DeiT-B learning rate formula: 0.0005 × (batch_size / 512)
-    # With batch_size=1024: lr = 0.0005 × 2 = 0.001
+    # Learning rate for ResNet-50 CNN with AdamW
+    # NOTE: DeiT-B uses lr=0.0005 * (batch/512) = 0.001 for transformers
+    # But CNNs need 3-10x higher LR than transformers!
+    #
+    # WHY CNNS NEED HIGHER LEARNING RATES THAN TRANSFORMERS:
+    #
+    # 1. DEPTH: More sequential multiplications during backprop
+    #    - ResNet-50: 48 convolutional layers → 48 multiplications in chain rule
+    #    - DeiT-B: 12 transformer layers → 12 multiplications in chain rule
+    #    - Deeper networks = more gradient attenuation through repeated multiplication
+    #
+    # 2. GRADIENT CONNECTIVITY: Local vs global gradient flow
+    #    CNN (local receptive fields):
+    #      - K×K kernel (e.g., 3×3) connects each output to K² = 9 nearby inputs
+    #      - Gradient from one output position flows to only 9 input positions (local)
+    #      - To reach distant positions, gradient must "hop" through many layers
+    #      - Gradient connections per position: O(K²) where K=3
+    #
+    #    Transformer (self-attention all-to-all):
+    #      - Self-attention: out_i = sum_j(attention_weights[i,j] * value_j)
+    #      - Each output connects to ALL N input tokens simultaneously
+    #      - Gradient from one output flows to all N=196 inputs (for 14×14 patches)
+    #      - Gradient connections per position: O(N) where N=196
+    #      - Example: 196 gradient paths (transformer) vs 9 paths (CNN) = 20× more connections
+    #
+    # 3. ACTIVATION FUNCTIONS:
+    #    - ReLU (CNNs): gradient = 0 when input < 0 (dead neurons block gradient flow)
+    #    - GELU (Transformers): smooth, non-zero gradient everywhere
+    #
+    # CONSEQUENCE:
+    #   - CNN gradients are weaker → need higher LR to make meaningful weight updates
+    #   - Transformer gradients are stronger → smaller LR prevents overshooting
+    #   - Using transformer LR (0.001) on CNN → gradients too weak → loss stuck at 4.4
+    #   - Using CNN LR (0.1) on transformer → gradients too strong → training unstable
+    #
+    # Standard ResNet-50 LRs:
+    #   - With AdamW: 0.003 - 0.01 (what we use, 3-10x higher than transformers)
+    #   - With SGD: 0.1 - 0.4 (100x higher than transformers due to no adaptive LR)
+    #
+    # Linear scaling rule: lr = base_lr × (batch_size / base_batch)
+    # For AdamW on ResNet-50:
+    #   - Base batch: 256
+    #   - Base lr: 0.001 (conservative for AdamW)
+    #   - Our batch: 1024
+    #   - Scaled lr: 0.001 × (1024/256) = 0.004
     effective_batch_size = batch_size_per_gpu * grad_accum
-    initial_lr = 0.0005 * (effective_batch_size / 512)
+    base_lr = 0.001  # Base LR for batch=256 with AdamW
+    initial_lr = base_lr * (effective_batch_size / 256)
 
     # DeiT-B warmup: 5 epochs
     warmup_epochs = 5
