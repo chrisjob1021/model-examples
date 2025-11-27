@@ -679,6 +679,11 @@ class CNN(nn.Module):
             if input_tensor is None:
                 raise ValueError("No input tensor provided. Expected 'x' or 'pixel_values' argument.")
 
+        # Clone input tensor to prevent CUDAGraphs overwrite issues with torch.compile()
+        # This is necessary when using torch.compile() which uses CUDAGraphs for optimization
+        # The clone ensures the tensor isn't overwritten between runs
+        input_tensor = input_tensor.clone()
+
         x = self.conv1(input_tensor)
 
         # Gradient Checkpointing
@@ -1314,6 +1319,11 @@ class CNNTrainer(Trainer):
                 self._install_batchnorm_hooks(model)
             if not self.residual_hooks_installed:
                 self._install_residual_hooks(model)
+
+        # Mark step beginning for CUDAGraphs compatibility with torch.compile()
+        # This prevents CUDAGraphs from overwriting tensor outputs between runs
+        if hasattr(torch.compiler, 'cudagraph_mark_step_begin'):
+            torch.compiler.cudagraph_mark_step_begin()
 
         loss = super().training_step(model, inputs, num_items_in_batch)
 

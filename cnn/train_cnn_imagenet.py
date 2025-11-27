@@ -565,7 +565,7 @@ def main():
     # Recomputes activations during backward pass instead of storing them
     # Reduces memory ~50-70%, allowing larger batch sizes
     # Cost: ~20-30% slower per step, but larger batches = fewer steps overall
-    use_gradient_checkpointing = True
+    use_gradient_checkpointing = False # TODO: seeing if we need this
 
     model = CNN(
         use_prelu=use_prelu,
@@ -607,10 +607,14 @@ def main():
 
     # torch.compile() for 10-30% speedup on PyTorch 2.0+
     # Compiles the model into optimized kernels using TorchDynamo + TorchInductor
+    # Note: "reduce-overhead" mode uses CUDAGraphs which can cause issues with in-place ops
+    # Using "default" mode instead to avoid CUDAGraphs overwrite errors
     use_torch_compile = True  # TODO: disable if compilation issues occur
     if use_torch_compile and hasattr(torch, 'compile'):
         print("🔧 Compiling model with torch.compile()...")
-        model = torch.compile(model, mode="reduce-overhead")  # "reduce-overhead" optimizes for throughput
+        # Use "default" mode instead of "reduce-overhead" to avoid CUDAGraphs issues
+        # "default" still provides optimization benefits without aggressive CUDAGraphs
+        model = torch.compile(model, mode="default")
         print("✅ Model compiled successfully")
     elif use_torch_compile:
         print("⚠️ torch.compile() not available (requires PyTorch 2.0+)")
@@ -626,7 +630,7 @@ def main():
     # With gradient checkpointing enabled, we can fit larger batches
     # Try 512 per GPU with grad_accum=2 for effective batch 1024
     # If OOM, reduce to 384 or back to 256
-    batch_size_per_gpu = 512
+    batch_size_per_gpu = 512 # TODO: tuning
     grad_accum = 2  # Fewer accumulation steps = faster training
     
     # Check if we want to resume from a checkpoint
