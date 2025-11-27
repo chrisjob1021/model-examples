@@ -261,23 +261,23 @@ def main():
         print(f"CUDA version: {torch.version.cuda}")
         print(f"cuDNN version: {torch.backends.cudnn.version()}")
 
-        # Disable TF32 (reduced precision tensor operations)
-        torch.backends.cuda.matmul.allow_tf32 = False
-        torch.backends.cudnn.allow_tf32 = False
+        # TODO: disable TF32 if numerical instability occurs
+        torch.backends.cuda.matmul.allow_tf32 = True
+        torch.backends.cudnn.allow_tf32 = True
 
-        # Force deterministic algorithms (critical for numerical stability on newer GPUs)
-        torch.backends.cudnn.benchmark = False
-        torch.backends.cudnn.deterministic = True
+        # TODO: disable benchmark and enable deterministic if reproducibility needed
+        torch.backends.cudnn.benchmark = True
+        torch.backends.cudnn.deterministic = False
 
         # Prevent reduced precision reductions in FP32 mode
         torch.backends.cuda.matmul.allow_fp16_reduced_precision_reduction = False
 
-        print(f"🔧 TF32 disabled for numerical stability")
-        print(f"🔧 cuDNN deterministic mode enabled")
-        print(f"🔧 Forced full FP32 precision for all operations")
+        print(f"🔧 TF32 enabled for faster matmuls")
+        print(f"🔧 cuDNN benchmark enabled, deterministic disabled")
+        print(f"🔧 FP16 reduced precision reduction disabled")
 
     # Global flag to disable mixed precision training
-    use_mixed_precision = False
+    use_mixed_precision = True  # TODO: disable if numerical instability occurs
 
     # Check for mixed precision support
     use_bf16 = False
@@ -345,8 +345,8 @@ def main():
     #   alpha = 1.0: Uniform [0,1], any mixing ratio equally likely
     #   alpha = 2.0: Bell-shaped, λ clusters around 0.5 (always ~50/50 mix)
     #
-    mixup_alpha = 0.8       # timm default for MixUp. Lower = less blending on average
-    cutmix_alpha = 1.0      # timm default for CutMix. 1.0 = uniform patch sizes
+    mixup_alpha = 0.0       # TODO: re-enable (was 0.8) once baseline converges
+    cutmix_alpha = 0.0      # TODO: re-enable (was 1.0) once baseline converges
     mix_prob = 1.0          # Probability of applying MixUp or CutMix to each batch
     mix_switch_prob = 0.5   # When both enabled: P(CutMix) vs P(MixUp). 0.5 = equal chance
     mix_mode = 'batch'      # 'batch': same λ for all samples (fast)
@@ -604,7 +604,17 @@ def main():
         print(f"❌ Warning: Model parameters are on {model_device}, expected {expected_device}")
     else:
         print(f"✅ Model parameters confirmed on {expected_device}")
-    
+
+    # torch.compile() for 10-30% speedup on PyTorch 2.0+
+    # Compiles the model into optimized kernels using TorchDynamo + TorchInductor
+    use_torch_compile = True  # TODO: disable if compilation issues occur
+    if use_torch_compile and hasattr(torch, 'compile'):
+        print("🔧 Compiling model with torch.compile()...")
+        model = torch.compile(model, mode="reduce-overhead")  # "reduce-overhead" optimizes for throughput
+        print("✅ Model compiled successfully")
+    elif use_torch_compile:
+        print("⚠️ torch.compile() not available (requires PyTorch 2.0+)")
+
     # Count parameters
     total_params = sum(p.numel() for p in model.parameters())
     trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
@@ -782,7 +792,7 @@ def main():
         logging_dir="./logs/logs" if not disable_logging else None,
         remove_unused_columns=False, # Fix for custom dataset format
         dataloader_num_workers=16,      # Parallel data loading
-        dataloader_persistent_workers=False,    # Enabled for L40S - keeps workers alive, reduces PCIe overhead on non-NVLink GPUs
+        dataloader_persistent_workers=True,     # TODO: disable if OOM issues occur (keeps workers alive between epochs)
                                                 # IMPORTANT: it looks we were getting oom-killed leaving these alive on a 128GB mem system
         dataloader_pin_memory=True,     # If True, the DataLoader will copy Tensors into CUDA pinned memory before returning them.
                                         # This can speed up host-to-GPU transfer, especially for large batches.

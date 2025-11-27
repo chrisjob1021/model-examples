@@ -1305,13 +1305,15 @@ class CNNTrainer(Trainer):
 
     def training_step(self, model, inputs, num_items_in_batch=None):
         """Override training_step to add gradient monitoring."""
-        # Install hooks on first training step
-        if not self.activation_hooks_installed:
-            self._install_activation_hooks(model)
-        if not self.bn_hooks_installed:
-            self._install_batchnorm_hooks(model)
-        if not self.residual_hooks_installed:
-            self._install_residual_hooks(model)
+        # Install hooks on first training step (only if gradient logging is enabled)
+        # These hooks add overhead on every forward pass, so skip them when not logging
+        if self.gradient_logging_enabled:
+            if not self.activation_hooks_installed:
+                self._install_activation_hooks(model)
+            if not self.bn_hooks_installed:
+                self._install_batchnorm_hooks(model)
+            if not self.residual_hooks_installed:
+                self._install_residual_hooks(model)
 
         loss = super().training_step(model, inputs, num_items_in_batch)
 
