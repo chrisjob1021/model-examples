@@ -682,7 +682,7 @@ def main():
     else:
         # Original training configuration
         # 100 epochs is standard for ResNet-50 (300 is for ViT/DeiT)
-        num_epochs = 100
+        num_epochs = 300 # TODO: evaluating different values
         output_dir = base_output_dir
         print(f"🆕 Starting fresh training for {num_epochs} epochs")
         print(f"   Output directory: {output_dir}") 
@@ -767,7 +767,7 @@ def main():
     #   - Our batch: 1024
     #   - Scaled lr: 0.001 × (1024/256) = 0.004
     effective_batch_size = batch_size_per_gpu * grad_accum
-    base_lr = 0.001  # Base LR for batch=256 with AdamW
+    base_lr = 0.003  # TODO: Base LR for batch=256 with AdamW
     initial_lr = base_lr * (effective_batch_size / 256)
 
     # DeiT-B warmup: 5 epochs
@@ -878,13 +878,13 @@ def main():
         # then take the same downhill step −η ∇f(θ_t).
 
         max_grad_norm=100.0,  # High threshold for grad stats logging without aggressive clipping
-        lr_scheduler_type="cosine",  # DeiT-B uses cosine decay to 0
-        # Alternative: cosine with minimum LR floor
-        # lr_scheduler_type="cosine_with_min_lr",
-        # lr_scheduler_kwargs={
-        #     "min_lr_rate": 0.30,  # Minimum LR as ratio of initial LR (% of initial)
-        #     # lr = min_lr + (initial_lr - min_lr) * (1 + cos(π * t/T)) / 2
-        # },
+        #lr_scheduler_type="cosine",  # TODO: DeiT-B uses cosine decay to 0
+        #Alternative: cosine with minimum LR floor
+        lr_scheduler_type="cosine_with_min_lr",
+        lr_scheduler_kwargs={
+            "min_lr_rate": 0.30,  # Minimum LR as ratio of initial LR (% of initial)
+            # lr = min_lr + (initial_lr - min_lr) * (1 + cos(π * t/T)) / 2
+        },
         eval_strategy="epoch",
         save_strategy="epoch",
         logging_strategy="steps",
