@@ -796,7 +796,7 @@ def main():
         logging_dir="./logs/logs" if not disable_logging else None,
         remove_unused_columns=False, # Fix for custom dataset format
         dataloader_num_workers=16,      # Parallel data loading
-        dataloader_persistent_workers=True,     # TODO: disable if OOM issues occur (keeps workers alive between epochs)
+        dataloader_persistent_workers=False,     # TODO: disable if OOM issues occur (keeps workers alive between epochs)
                                                 # IMPORTANT: it looks we were getting oom-killed leaving these alive on a 128GB mem system
         dataloader_pin_memory=True,     # If True, the DataLoader will copy Tensors into CUDA pinned memory before returning them.
                                         # This can speed up host-to-GPU transfer, especially for large batches.
