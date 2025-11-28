@@ -1182,6 +1182,8 @@ class CNNTrainer(Trainer):
                 pixel_values = torch.from_numpy(pixel_values)
 
         # Convert labels to tensor if it's not already
+        # Note: MixUp/CutMix produces soft labels (float, shape [N, C])
+        # while standard training uses hard labels (long, shape [N])
         if not isinstance(labels, torch.Tensor):
             labels = torch.tensor(labels, dtype=torch.long)
 
@@ -1189,6 +1191,10 @@ class CNNTrainer(Trainer):
         model_device = next(model.parameters()).device
         pixel_values = pixel_values.to(model_device)
         labels = labels.to(model_device)
+
+        # Detect soft labels from MixUp/CutMix (2D float tensor)
+        # vs hard labels from standard training (1D integer tensor)
+        is_soft_labels = labels.dim() == 2
 
         # Check for input anomalies (both training and eval)
         mode = "training" if model.training else "evaluation"
@@ -1221,13 +1227,58 @@ class CNNTrainer(Trainer):
                 {"output_shape": str(outputs.shape)}
             )
 
-        # Use label smoothing from training args if available, otherwise default to 0.0
-        label_smoothing = 0.0
-        if hasattr(self, 'args') and hasattr(self.args, 'label_smoothing_factor'):
-            label_smoothing = self.args.label_smoothing_factor
-
-        loss_fn = nn.CrossEntropyLoss(label_smoothing=label_smoothing)
-        loss = loss_fn(outputs, labels)
+        if is_soft_labels:
+            # Soft labels from MixUp/CutMix: use soft cross-entropy
+            # Do NOT apply label_smoothing - soft labels already encode the mixing
+            #
+            # Shape analysis for soft labels (MixUp/CutMix enabled):
+            #   outputs:   [N, C] = [512, 1000] raw logits from model
+            #   labels:    [N, C] = [512, 1000] soft probabilities from MixUp (e.g., [0, 0.7, 0.3, 0, ...])
+            #   log_probs: [N, C] = [512, 1000] log-softmax of outputs
+            #   labels * log_probs: [N, C] = element-wise product
+            #   sum(dim=-1): [N] = [512] sum across classes per sample
+            #   mean(): scalar loss
+            #
+            # Why log_softmax? Cross-entropy needs log(probability), and log_softmax is numerically
+            # stable (avoids overflow from exp() in softmax). This is what CrossEntropyLoss does
+            # internally - we just do it explicitly here because we have soft labels.
+            #
+            # Cross-entropy formula: L = -sum_c(y_c * log(p_c))
+            #
+            # Example with 3 classes, MixUp blending 70% cat (class 1) + 30% dog (class 2):
+            #   outputs (logits) = [1.0, 3.0, 0.5]
+            #   log_probs        = log(softmax([1.0, 3.0, 0.5])) = [-2.1, -0.15, -2.7]
+            #   labels           = [0.0, 0.7, 0.3]  <- soft target from MixUp
+            #   loss = -(0.0 * -2.1 + 0.7 * -0.15 + 0.3 * -2.7) = 0.915
+            log_probs = F.log_softmax(outputs, dim=-1)
+            loss = -torch.sum(labels * log_probs, dim=-1).mean()
+        else:
+            # Hard labels: use standard CrossEntropyLoss with label smoothing
+            #
+            # Shape analysis for hard labels (standard training):
+            #   outputs: [N, C] = [512, 1000] logits
+            #   labels (input):    [N] = [512] integer class indices (e.g., [42, 517, 3, ...])
+            #   labels (internal): [N, C] - CrossEntropyLoss converts to one-hot internally:
+            #       without smoothing: [0, 0, 1, 0, ...] for class 2
+            #       with smoothing=0.1: [0.0001, 0.0001, 0.9, 0.0001, ...] for class 2
+            #   loss: scalar
+            #
+            # Cross-entropy formula: L = -sum_c(y_c * log(p_c))
+            # With one-hot labels, this simplifies to: L = -log(p_correct_class)
+            #
+            # Example with 3 classes, true label = class 1 (cat), no smoothing:
+            #   outputs (logits) = [1.0, 3.0, 0.5]
+            #   log_probs        = log(softmax([1.0, 3.0, 0.5])) = [-2.1, -0.15, -2.7]
+            #   labels (one-hot) = [0.0, 1.0, 0.0]  <- hard target
+            #   loss = -(0.0 * -2.1 + 1.0 * -0.15 + 0.0 * -2.7) = 0.15
+            #        = -log_probs[correct_class] = -(-0.15) = 0.15
+            #
+            # Applying label_smoothing to already-soft MixUp labels would double-smooth!
+            label_smoothing = 0.0
+            if hasattr(self, 'args') and hasattr(self.args, 'label_smoothing_factor'):
+                label_smoothing = self.args.label_smoothing_factor
+            loss_fn = nn.CrossEntropyLoss(label_smoothing=label_smoothing)
+            loss = loss_fn(outputs, labels)
 
         # Check for loss anomalies (both training and eval)
         if torch.isnan(loss):
