@@ -1069,11 +1069,17 @@ class CNNTrainer(Trainer):
     """Custom trainer for CNN models with gradient anomaly logging."""
 
     def __init__(self, *args, error_log_path="gradient_anomalies.log",
-                 logging_thresholds=None, train_sampler=None, **kwargs):
+                 logging_thresholds=None, train_sampler=None,
+                 grad_histogram_config=None, **kwargs):
         super().__init__(*args, **kwargs)
         self.error_log_path = error_log_path
         self.last_loss = None
         self.custom_train_sampler = train_sampler  # For Repeated Augmentation
+
+        # Gradient histogram monitoring (optional)
+        self.grad_histogram = None
+        self.grad_histogram_config = grad_histogram_config or {}
+        self._grad_histogram_initialized = False
 
         # Logging thresholds - can be configured from training script
         default_thresholds = {
@@ -1308,8 +1314,40 @@ class CNNTrainer(Trainer):
 
         return super().create_scheduler(num_training_steps, optimizer)
 
+    def _init_grad_histogram(self, model):
+        """Initialize gradient histogram monitoring if configured."""
+        if self._grad_histogram_initialized or not self.grad_histogram_config.get('enabled', False):
+            return
+
+        from grad_monitor import GradHistogram
+
+        config = self.grad_histogram_config
+
+        self.grad_histogram = GradHistogram(
+            model,
+            modules_filter=config.get('modules_filter', None),  # None = all layers
+            bins=config.get('bins', 41),
+            track_layers=config.get('track_layers', ("weight",)),
+            log_every_n_steps=config.get('log_every_n_steps', 100),
+        )
+        self._grad_histogram_initialized = True
+
+    def _export_grad_histogram(self):
+        """Export gradient histogram to CSV (append mode)."""
+        if self.grad_histogram is None:
+            return
+
+        config = self.grad_histogram_config
+        output_dir = config.get('output_dir', self.args.output_dir)
+        path = f"{output_dir}/grad_histogram.csv"
+        self.grad_histogram.export_csv(path, append=True)
+
     def training_step(self, model, inputs, num_items_in_batch=None):
         """Override training_step to add gradient monitoring."""
+        # Initialize gradient histogram on first step (if enabled)
+        if not self._grad_histogram_initialized and self.grad_histogram_config.get('enabled', False):
+            self._init_grad_histogram(model)
+
         # Install hooks on first training step (only if gradient logging is enabled)
         # These hooks add overhead on every forward pass, so skip them when not logging
         if self.gradient_logging_enabled:
@@ -1340,7 +1378,24 @@ class CNNTrainer(Trainer):
             self._check_activation_magnitudes()
             self._check_residual_blocks()
 
+        # Export gradient histograms periodically (if enabled)
+        if self.grad_histogram is not None:
+            export_every = self.grad_histogram_config.get('export_every_n_steps', 1000)
+            if self.state.global_step > 0 and self.state.global_step % export_every == 0:
+                self._export_grad_histogram()
+
         return loss
+
+    def train(self, *args, **kwargs):
+        """Override train to cleanup gradient histogram at the end."""
+        try:
+            result = super().train(*args, **kwargs)
+        finally:
+            # Export remaining records and cleanup
+            if self.grad_histogram is not None:
+                self._export_grad_histogram()
+                self.grad_histogram.close()
+        return result
 
     def _clamp_prelu_alphas(self, model):
         """Clamp PReLU alpha parameters to [0, 1] range to prevent pathological behavior.

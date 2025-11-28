@@ -994,6 +994,16 @@ def main():
         repeat_aug_sampler = SimpleRepeatSampler(train_dataset, num_repeats=num_aug_repeats)
         print(f"🔄 Repeated Augmentation: {num_aug_repeats}x repeats per image (single-GPU, fallback)")
 
+    # Gradient histogram config - tracks gradient distributions for all layer weights
+    grad_histogram_config = {
+        'enabled': True,
+        'bins': 41,
+        'track_layers': ("weight",),  # Only weights, not biases
+        'log_every_n_steps': 100,
+        'export_every_n_steps': 1000,
+        'output_dir': output_dir,
+    }
+
     trainer = ModelTrainer(
         model=model,
         training_args=training_args,
@@ -1006,6 +1016,7 @@ def main():
             "error_log_path": error_log_path,  # Pass error log path for gradient anomaly tracking
             "logging_thresholds": logging_thresholds,  # Pass configurable logging thresholds
             "train_sampler": repeat_aug_sampler,  # Repeated augmentation sampler
+            "grad_histogram_config": grad_histogram_config,
         },
     )
     
