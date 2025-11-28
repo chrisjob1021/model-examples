@@ -62,7 +62,8 @@ class GradHistogram:
         self.handles = []
         self.track_layers = track_layers
         self.log_every_n_steps = log_every_n_steps
-        self._step_counter = 0
+        self._current_step = 0  # Set by trainer before backward
+        self._last_logged_step = -1  # Track which step we last logged
         self._enabled = True
 
         if modules_filter is None:
@@ -80,14 +81,19 @@ class GradHistogram:
 
         print(f"📊 GradHistogram: Registered {len(self.handles)} hooks (all layers, weights only)")
 
+    def set_step(self, step):
+        """Set current training step (call before backward pass)."""
+        self._current_step = step
+
     def _make_hook(self, pname):
         """Create a backward hook for a specific parameter."""
         def hook(grad):
             if not self._enabled:
                 return grad
 
-            self._step_counter += 1
-            if self._step_counter % self.log_every_n_steps != 0:
+            # Only log on specified intervals
+            step = self._current_step
+            if step % self.log_every_n_steps != 0:
                 return grad
 
             g = grad.detach().flatten().float()  # Ensure float for histc
@@ -110,7 +116,7 @@ class GradHistogram:
 
             self.records.append({
                 "param": pname,
-                "step": self._step_counter,
+                "step": step,
                 "mean": g.mean().item(),
                 "std": g.std(unbiased=False).item(),
                 "abs_mean": g.abs().mean().item(),

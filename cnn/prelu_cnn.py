@@ -1358,6 +1358,10 @@ class CNNTrainer(Trainer):
             if not self.residual_hooks_installed:
                 self._install_residual_hooks(model)
 
+        # Set current step for gradient histogram (before backward pass)
+        if self.grad_histogram is not None:
+            self.grad_histogram.set_step(self.state.global_step)
+
         # Mark step beginning for CUDAGraphs compatibility with torch.compile()
         # This prevents CUDAGraphs from overwriting tensor outputs between runs
         if hasattr(torch.compiler, 'cudagraph_mark_step_begin'):
