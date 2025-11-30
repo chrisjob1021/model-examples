@@ -1158,6 +1158,22 @@ class CNNTrainer(Trainer):
             return self.custom_train_sampler
         return super()._get_train_sampler(dataset)
 
+    def get_eval_dataloader(self, eval_dataset=None):
+        """Override to use default collation for evaluation (no MixUp/CutMix)."""
+        from torch.utils.data import default_collate
+
+        # Temporarily replace the data_collator with default_collate
+        original_collator = self.data_collator
+        self.data_collator = default_collate
+
+        # Call parent method which will use default_collate
+        eval_dataloader = super().get_eval_dataloader(eval_dataset)
+
+        # Restore the original collator for training
+        self.data_collator = original_collator
+
+        return eval_dataloader
+
     def _log_anomaly(self, step, message, details=None):
         """Log anomaly to error log file."""
         if not self.gradient_logging_enabled:
