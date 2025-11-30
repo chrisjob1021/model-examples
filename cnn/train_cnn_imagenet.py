@@ -894,7 +894,7 @@ def main():
         greater_is_better=False,
         prediction_loss_only=False,
         label_names=["labels"], # need this to get eval_loss
-        label_smoothing_factor=0.1,  # DeiT-B uses 0.1
+        label_smoothing_factor=0.0,  # TODO: re-enable only when MixUp/CutMix disabled
         report_to="tensorboard" if not disable_logging else "none",
     )
 

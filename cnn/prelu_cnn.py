@@ -1223,19 +1223,54 @@ class CNNTrainer(Trainer):
         # vs hard labels from standard training (1D integer tensor)
         is_soft_labels = labels.dim() == 2
 
+        # Pre-compute soft-label stats so we can both log and sanity check them
+        label_sums = None
+        lambda_vals = None
+        if is_soft_labels:
+            label_sums = labels.sum(dim=-1)
+            lambda_vals = labels.max(dim=-1).values
+            # Raise an anomaly early if the soft labels are not a valid distribution
+            if torch.any((label_sums < 0.99) | (label_sums > 1.01)):
+                self._log_anomaly(
+                    self.state.global_step,
+                    "Soft labels do not sum to 1.0 (MixUp/CutMix)",
+                    {
+                        "min_sum": f"{label_sums.min().item():.4f}",
+                        "max_sum": f"{label_sums.max().item():.4f}",
+                        "mean_sum": f"{label_sums.mean().item():.4f}",
+                    },
+                )
+
+        log_mixup_stats = (
+            self.mixup_debug_enabled
+            and hasattr(self, "state")
+            and (self.state.global_step < 10 or self.state.global_step % 500 == 0)
+        )
+
         # MixUp/CutMix debug logging
-        if self.mixup_debug_enabled and hasattr(self, 'state') and self.state.global_step % 500 == 0:
+        if log_mixup_stats:
             mode = "training" if model.training else "evaluation"
             with open(self.mixup_debug_log_path, 'a') as f:
                 f.write(f"\n[Step {self.state.global_step}] {mode} - Labels info:\n")
                 f.write(f"  Shape: {labels.shape}, Dtype: {labels.dtype}, Is soft: {is_soft_labels}\n")
                 if is_soft_labels:
-                    label_sums = labels.sum(dim=-1)
-                    label_maxs = labels.max(dim=-1).values
                     f.write(f"  Label sums (should be ~1.0): min={label_sums.min():.4f}, max={label_sums.max():.4f}, mean={label_sums.mean():.4f}\n")
-                    f.write(f"  Label maxs (lambda values): min={label_maxs.min():.4f}, max={label_maxs.max():.4f}, mean={label_maxs.mean():.4f}\n")
+                    f.write(f"  Label maxs (lambda values): min={lambda_vals.min():.4f}, max={lambda_vals.max():.4f}, mean={lambda_vals.mean():.4f}\n")
                 else:
                     f.write(f"  Hard labels range: min={labels.min()}, max={labels.max()}\n")
+
+        # Emit TensorBoard scalars so we can spot MixUp/CutMix pathologies in the UI
+        if is_soft_labels and hasattr(self, "state") and (self.state.global_step < 10 or self.state.global_step % 200 == 0):
+            self.log(
+                {
+                    "mixup/label_sum_min": label_sums.min().item(),
+                    "mixup/label_sum_max": label_sums.max().item(),
+                    "mixup/label_sum_mean": label_sums.mean().item(),
+                    "mixup/lambda_min": lambda_vals.min().item(),
+                    "mixup/lambda_max": lambda_vals.max().item(),
+                    "mixup/lambda_mean": lambda_vals.mean().item(),
+                }
+            )
 
         # Check for input anomalies (both training and eval)
         mode = "training" if model.training else "evaluation"
@@ -1283,7 +1318,6 @@ class CNNTrainer(Trainer):
 
         if is_soft_labels:
             # Verify soft labels sum to 1.0 (critical for correct loss)
-            label_sums = labels.sum(dim=-1)
             if self.mixup_debug_enabled and not torch.allclose(label_sums, torch.ones_like(label_sums), atol=1e-3):
                 with open(self.mixup_debug_log_path, 'a') as f:
                     f.write(f"⚠️ WARNING [Step {self.state.global_step}]: Soft labels don't sum to 1.0! min={label_sums.min():.4f}, max={label_sums.max():.4f}, mean={label_sums.mean():.4f}\n")
@@ -1297,7 +1331,7 @@ class CNNTrainer(Trainer):
         loss = loss_fn(outputs, labels)
 
         # MixUp/CutMix loss comparison logging
-        if self.mixup_debug_enabled and hasattr(self, 'state') and self.state.global_step % 500 == 0:
+        if log_mixup_stats:
             mode = "training" if model.training else "evaluation"
             with open(self.mixup_debug_log_path, 'a') as f:
                 f.write(f"[Step {self.state.global_step}] {mode} - Loss: {loss.item():.4f} (is_soft_labels={is_soft_labels})\n")
@@ -1307,9 +1341,6 @@ class CNNTrainer(Trainer):
                     hard_labels = labels.argmax(dim=-1)
                     hard_loss_no_smooth = nn.CrossEntropyLoss()(outputs.detach(), hard_labels)
                     hard_loss_with_smooth = nn.CrossEntropyLoss(label_smoothing=ls_factor)(outputs.detach(), hard_labels)
-
-                    # Lambda distribution (max value in each soft label = primary class weight)
-                    lambda_vals = labels.max(dim=-1).values
 
                     # Loss breakdown by primary vs secondary class
                     with torch.no_grad():
