@@ -1004,6 +1004,11 @@ def main():
         'output_dir': output_dir,
     }
 
+    # MixUp/CutMix debug logging (enable to diagnose convergence issues)
+    mixup_debug_log_path = os.path.join(output_dir, "mixup_debug.log") if (mixup_alpha > 0 or cutmix_alpha > 0) else None
+    if mixup_debug_log_path:
+        print(f"📝 MixUp/CutMix debug log: {mixup_debug_log_path}")
+
     trainer = ModelTrainer(
         model=model,
         training_args=training_args,
@@ -1017,6 +1022,7 @@ def main():
             "logging_thresholds": logging_thresholds,  # Pass configurable logging thresholds
             "train_sampler": repeat_aug_sampler,  # Repeated augmentation sampler
             "grad_histogram_config": grad_histogram_config,
+            "mixup_debug_log_path": mixup_debug_log_path,  # MixUp/CutMix debug logging
         },
     )
     

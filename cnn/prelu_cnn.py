@@ -1070,11 +1070,22 @@ class CNNTrainer(Trainer):
 
     def __init__(self, *args, error_log_path="gradient_anomalies.log",
                  logging_thresholds=None, train_sampler=None,
-                 grad_histogram_config=None, **kwargs):
+                 grad_histogram_config=None, mixup_debug_log_path=None, **kwargs):
         super().__init__(*args, **kwargs)
         self.error_log_path = error_log_path
         self.last_loss = None
         self.custom_train_sampler = train_sampler  # For Repeated Augmentation
+
+        # MixUp/CutMix debug logging (optional)
+        self.mixup_debug_log_path = mixup_debug_log_path
+        self.mixup_debug_enabled = mixup_debug_log_path is not None
+        if self.mixup_debug_enabled:
+            import os
+            os.makedirs(os.path.dirname(mixup_debug_log_path) if os.path.dirname(mixup_debug_log_path) else ".", exist_ok=True)
+            with open(mixup_debug_log_path, 'w') as f:
+                f.write("=" * 100 + "\n")
+                f.write("MIXUP/CUTMIX DEBUG LOG\n")
+                f.write("=" * 100 + "\n\n")
 
         # Gradient histogram monitoring (optional)
         self.grad_histogram = None
@@ -1196,6 +1207,20 @@ class CNNTrainer(Trainer):
         # vs hard labels from standard training (1D integer tensor)
         is_soft_labels = labels.dim() == 2
 
+        # MixUp/CutMix debug logging
+        if self.mixup_debug_enabled and hasattr(self, 'state') and self.state.global_step % 500 == 0:
+            mode = "training" if model.training else "evaluation"
+            with open(self.mixup_debug_log_path, 'a') as f:
+                f.write(f"\n[Step {self.state.global_step}] {mode} - Labels info:\n")
+                f.write(f"  Shape: {labels.shape}, Dtype: {labels.dtype}, Is soft: {is_soft_labels}\n")
+                if is_soft_labels:
+                    label_sums = labels.sum(dim=-1)
+                    label_maxs = labels.max(dim=-1).values
+                    f.write(f"  Label sums (should be ~1.0): min={label_sums.min():.4f}, max={label_sums.max():.4f}, mean={label_sums.mean():.4f}\n")
+                    f.write(f"  Label maxs (lambda values): min={label_maxs.min():.4f}, max={label_maxs.max():.4f}, mean={label_maxs.mean():.4f}\n")
+                else:
+                    f.write(f"  Hard labels range: min={labels.min()}, max={labels.max()}\n")
+
         # Check for input anomalies (both training and eval)
         mode = "training" if model.training else "evaluation"
         if torch.isnan(pixel_values).any():
@@ -1279,6 +1304,17 @@ class CNNTrainer(Trainer):
                 label_smoothing = self.args.label_smoothing_factor
             loss_fn = nn.CrossEntropyLoss(label_smoothing=label_smoothing)
             loss = loss_fn(outputs, labels)
+
+        # MixUp/CutMix loss comparison logging
+        if self.mixup_debug_enabled and hasattr(self, 'state') and self.state.global_step % 500 == 0:
+            mode = "training" if model.training else "evaluation"
+            with open(self.mixup_debug_log_path, 'a') as f:
+                f.write(f"[Step {self.state.global_step}] {mode} - Loss: {loss.item():.4f} (is_soft_labels={is_soft_labels})\n")
+                if is_soft_labels:
+                    # Compute what hard label loss would be for comparison
+                    hard_labels = labels.argmax(dim=-1)
+                    hard_loss = nn.CrossEntropyLoss()(outputs.detach(), hard_labels)
+                    f.write(f"  Soft label loss: {loss.item():.4f}, Hard label equivalent: {hard_loss.item():.4f}, Diff: {loss.item() - hard_loss.item():.4f}\n")
 
         # Check for loss anomalies (both training and eval)
         if torch.isnan(loss):
