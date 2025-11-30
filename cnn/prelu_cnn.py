@@ -1268,58 +1268,33 @@ class CNNTrainer(Trainer):
                 {"output_shape": str(outputs.shape)}
             )
 
+        # Unified loss computation using PyTorch's CrossEntropyLoss
+        # Works for BOTH hard labels [N] and soft labels [N, C] (PyTorch 1.10+)
+        #
+        # Hard labels (MixUp disabled):
+        #   labels shape: [N] integer class indices
+        #   CrossEntropyLoss converts to one-hot internally
+        #   Apply label_smoothing from training args
+        #
+        # Soft labels (MixUp/CutMix enabled):
+        #   labels shape: [N, C] soft probabilities from mixing
+        #   CrossEntropyLoss computes cross-entropy against soft targets
+        #   Do NOT apply label_smoothing (soft labels already encode mixing)
+
         if is_soft_labels:
-            # Soft labels from MixUp/CutMix: use soft cross-entropy
-            # Do NOT apply label_smoothing - soft labels already encode the mixing
-            #
-            # Shape analysis for soft labels (MixUp/CutMix enabled):
-            #   outputs:   [N, C] = [512, 1000] raw logits from model
-            #   labels:    [N, C] = [512, 1000] soft probabilities from MixUp (e.g., [0, 0.7, 0.3, 0, ...])
-            #   log_probs: [N, C] = [512, 1000] log-softmax of outputs
-            #   labels * log_probs: [N, C] = element-wise product
-            #   sum(dim=-1): [N] = [512] sum across classes per sample
-            #   mean(): scalar loss
-            #
-            # Why log_softmax? Cross-entropy needs log(probability), and log_softmax is numerically
-            # stable (avoids overflow from exp() in softmax). This is what CrossEntropyLoss does
-            # internally - we just do it explicitly here because we have soft labels.
-            #
-            # Cross-entropy formula: L = -sum_c(y_c * log(p_c))
-            #
-            # Example with 3 classes, MixUp blending 70% cat (class 1) + 30% dog (class 2):
-            #   outputs (logits) = [1.0, 3.0, 0.5]
-            #   log_probs        = log(softmax([1.0, 3.0, 0.5])) = [-2.1, -0.15, -2.7]
-            #   labels           = [0.0, 0.7, 0.3]  <- soft target from MixUp
-            #   loss = -(0.0 * -2.1 + 0.7 * -0.15 + 0.3 * -2.7) = 0.915
-            log_probs = F.log_softmax(outputs, dim=-1)
-            loss = -torch.sum(labels * log_probs, dim=-1).mean()
-        else:
-            # Hard labels: use standard CrossEntropyLoss with label smoothing
-            #
-            # Shape analysis for hard labels (standard training):
-            #   outputs: [N, C] = [512, 1000] logits
-            #   labels (input):    [N] = [512] integer class indices (e.g., [42, 517, 3, ...])
-            #   labels (internal): [N, C] - CrossEntropyLoss converts to one-hot internally:
-            #       without smoothing: [0, 0, 1, 0, ...] for class 2
-            #       with smoothing=0.1: [0.0001, 0.0001, 0.9, 0.0001, ...] for class 2
-            #   loss: scalar
-            #
-            # Cross-entropy formula: L = -sum_c(y_c * log(p_c))
-            # With one-hot labels, this simplifies to: L = -log(p_correct_class)
-            #
-            # Example with 3 classes, true label = class 1 (cat), no smoothing:
-            #   outputs (logits) = [1.0, 3.0, 0.5]
-            #   log_probs        = log(softmax([1.0, 3.0, 0.5])) = [-2.1, -0.15, -2.7]
-            #   labels (one-hot) = [0.0, 1.0, 0.0]  <- hard target
-            #   loss = -(0.0 * -2.1 + 1.0 * -0.15 + 0.0 * -2.7) = 0.15
-            #        = -log_probs[correct_class] = -(-0.15) = 0.15
-            #
-            # Applying label_smoothing to already-soft MixUp labels would double-smooth!
-            label_smoothing = 0.0
-            if hasattr(self, 'args') and hasattr(self.args, 'label_smoothing_factor'):
-                label_smoothing = self.args.label_smoothing_factor
-            loss_fn = nn.CrossEntropyLoss(label_smoothing=label_smoothing)
-            loss = loss_fn(outputs, labels)
+            # Verify soft labels sum to 1.0 (critical for correct loss)
+            label_sums = labels.sum(dim=-1)
+            if self.mixup_debug_enabled and not torch.allclose(label_sums, torch.ones_like(label_sums), atol=1e-3):
+                with open(self.mixup_debug_log_path, 'a') as f:
+                    f.write(f"⚠️ WARNING [Step {self.state.global_step}]: Soft labels don't sum to 1.0! min={label_sums.min():.4f}, max={label_sums.max():.4f}, mean={label_sums.mean():.4f}\n")
+
+        # Get label smoothing factor (only applied to hard labels)
+        label_smoothing = 0.0
+        if not is_soft_labels and hasattr(self, 'args') and hasattr(self.args, 'label_smoothing_factor'):
+            label_smoothing = self.args.label_smoothing_factor
+
+        loss_fn = nn.CrossEntropyLoss(label_smoothing=label_smoothing)
+        loss = loss_fn(outputs, labels)
 
         # MixUp/CutMix loss comparison logging
         if self.mixup_debug_enabled and hasattr(self, 'state') and self.state.global_step % 500 == 0:
@@ -1327,10 +1302,35 @@ class CNNTrainer(Trainer):
             with open(self.mixup_debug_log_path, 'a') as f:
                 f.write(f"[Step {self.state.global_step}] {mode} - Loss: {loss.item():.4f} (is_soft_labels={is_soft_labels})\n")
                 if is_soft_labels:
-                    # Compute what hard label loss would be for comparison
+                    # Get label smoothing factor for fair comparison
+                    ls_factor = getattr(self.args, 'label_smoothing_factor', 0.0)
                     hard_labels = labels.argmax(dim=-1)
-                    hard_loss = nn.CrossEntropyLoss()(outputs.detach(), hard_labels)
-                    f.write(f"  Soft label loss: {loss.item():.4f}, Hard label equivalent: {hard_loss.item():.4f}, Diff: {loss.item() - hard_loss.item():.4f}\n")
+                    hard_loss_no_smooth = nn.CrossEntropyLoss()(outputs.detach(), hard_labels)
+                    hard_loss_with_smooth = nn.CrossEntropyLoss(label_smoothing=ls_factor)(outputs.detach(), hard_labels)
+
+                    # Lambda distribution (max value in each soft label = primary class weight)
+                    lambda_vals = labels.max(dim=-1).values
+
+                    # Loss breakdown by primary vs secondary class
+                    with torch.no_grad():
+                        probs = F.softmax(outputs.detach(), dim=-1)
+                        primary_idx = labels.argmax(dim=-1)
+                        primary_probs = probs.gather(1, primary_idx.unsqueeze(1)).squeeze()
+
+                        # Secondary class (second highest weight in soft labels)
+                        labels_no_primary = labels.clone()
+                        labels_no_primary.scatter_(1, primary_idx.unsqueeze(1), 0)
+                        secondary_idx = labels_no_primary.argmax(dim=-1)
+                        secondary_probs = probs.gather(1, secondary_idx.unsqueeze(1)).squeeze()
+                        secondary_weights = labels_no_primary.max(dim=-1).values
+
+                    f.write(f"  Soft label loss: {loss.item():.4f}\n")
+                    f.write(f"  Hard label loss (no smooth): {hard_loss_no_smooth.item():.4f}, (smooth={ls_factor}): {hard_loss_with_smooth.item():.4f}\n")
+                    f.write(f"  Diff from hard (no smooth): {loss.item() - hard_loss_no_smooth.item():.4f}, (smooth): {loss.item() - hard_loss_with_smooth.item():.4f}\n")
+                    f.write(f"  Lambda (primary weight): min={lambda_vals.min():.4f}, max={lambda_vals.max():.4f}, mean={lambda_vals.mean():.4f}\n")
+                    f.write(f"  Secondary weight (1-lambda): min={secondary_weights.min():.4f}, max={secondary_weights.max():.4f}, mean={secondary_weights.mean():.4f}\n")
+                    f.write(f"  Model P(primary): min={primary_probs.min():.4f}, max={primary_probs.max():.4f}, mean={primary_probs.mean():.4f}\n")
+                    f.write(f"  Model P(secondary): min={secondary_probs.min():.4f}, max={secondary_probs.max():.4f}, mean={secondary_probs.mean():.4f}\n")
 
         # Check for loss anomalies (both training and eval)
         if torch.isnan(loss):
@@ -1366,14 +1366,11 @@ class CNNTrainer(Trainer):
                 )
             self.last_loss = loss.item()
         
-        # Fix for HuggingFace Trainer gradient accumulation scaling bug
-        # Trainer scales logged loss by gradient_accumulation_steps, but actual training uses unscaled loss
-        # Only apply this fix during training, not during evaluation
-        if model.training and hasattr(self, 'args') and hasattr(self.args, 'gradient_accumulation_steps'):
-            # Only scale for logging, not for actual training gradients
-            if self.args.gradient_accumulation_steps > 1:
-                # This ensures logged loss shows the correct per-sample loss
-                loss = loss / self.args.gradient_accumulation_steps
+        # NOTE: Disabled - this was incorrectly weakening gradients by 1/grad_accum_steps
+        # HuggingFace Trainer already handles gradient accumulation correctly
+        # if model.training and hasattr(self, 'args') and hasattr(self.args, 'gradient_accumulation_steps'):
+        #     if self.args.gradient_accumulation_steps > 1:
+        #         loss = loss / self.args.gradient_accumulation_steps
 
         return (loss, outputs) if return_outputs else loss
 
