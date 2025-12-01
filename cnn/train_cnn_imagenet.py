@@ -767,7 +767,7 @@ def main():
     #   - Our batch: 1024
     #   - Scaled lr: 0.001 × (1024/256) = 0.004
     effective_batch_size = batch_size_per_gpu * grad_accum
-    base_lr = 0.003  # TODO: Base LR for batch=256 with AdamW
+    base_lr = 0.001  # TODO: tuning
     initial_lr = base_lr * (effective_batch_size / 256)
 
     # DeiT-B warmup: 5 epochs
