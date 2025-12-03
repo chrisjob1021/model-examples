@@ -345,9 +345,9 @@ def main():
     #   alpha = 1.0: Uniform [0,1], any mixing ratio equally likely
     #   alpha = 2.0: Bell-shaped, λ clusters around 0.5 (always ~50/50 mix)
     #
-    mixup_alpha = 0.2       # TODO: tune alpha if needed (0.2-1.0 range)
-    cutmix_alpha = 0.2      # TODO: tune alpha if needed (0.2-1.0 range)
-    mix_prob = 1.0          # Probability of applying MixUp or CutMix to each batch
+    mixup_alpha = 0.8       # TODO: tune alpha if needed (0.2-1.0 range)
+    cutmix_alpha = 1.0      # TODO: tune alpha if needed (0.2-1.0 range)
+    mix_prob = 0.50         # Probability of applying MixUp or CutMix to each batch
     mix_switch_prob = 0.5   # When both enabled: P(CutMix) vs P(MixUp). 0.5 = equal chance
     mix_mode = 'batch'      # 'batch': same λ for all samples (fast)
                             # 'pair': different λ per image pair
