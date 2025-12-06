@@ -347,7 +347,8 @@ def main():
     #
     mixup_alpha = 0.8       # TODO: tune alpha if needed (0.2-1.0 range)
     cutmix_alpha = 1.0      # TODO: tune alpha if needed (0.2-1.0 range)
-    mix_prob = 0.50         # Probability of applying MixUp or CutMix to each batch
+    mix_prob = 0.1          # TODO: Probability of applying MixUp or CutMix to each batch
+                            # Want to avoid bimodal training e.g. hard labels w/o cutmix vs soft labels with
     mix_switch_prob = 0.5   # When both enabled: P(CutMix) vs P(MixUp). 0.5 = equal chance
     mix_mode = 'batch'      # 'batch': same λ for all samples (fast)
                             # 'pair': different λ per image pair
@@ -767,7 +768,7 @@ def main():
     #   - Our batch: 1024
     #   - Scaled lr: 0.001 × (1024/256) = 0.004
     effective_batch_size = batch_size_per_gpu * grad_accum
-    base_lr = 0.001  # TODO: tuning
+    base_lr = 0.0005  # TODO: tuning
     initial_lr = base_lr * (effective_batch_size / 256)
 
     # DeiT-B warmup: 5 epochs
@@ -877,7 +878,7 @@ def main():
         # Momentum just adds inertia: keep μ of last velocity (useful when directions persist, otherwise it resists),
         # then take the same downhill step −η ∇f(θ_t).
 
-        max_grad_norm=100.0,  # High threshold for grad stats logging without aggressive clipping
+        max_grad_norm=2.0,  # TODO: Some threshold required for grad stats logging without aggressive clipping
         #lr_scheduler_type="cosine",  # TODO: DeiT-B uses cosine decay to 0
         #Alternative: cosine with minimum LR floor
         lr_scheduler_type="cosine_with_min_lr",
