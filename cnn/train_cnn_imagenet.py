@@ -261,11 +261,11 @@ def main():
         print(f"CUDA version: {torch.version.cuda}")
         print(f"cuDNN version: {torch.backends.cudnn.version()}")
 
-        # TODO: disable TF32 if numerical instability occurs
+        # disable TF32 if numerical instability occurs
         torch.backends.cuda.matmul.allow_tf32 = True
         torch.backends.cudnn.allow_tf32 = True
 
-        # TODO: disable benchmark and enable deterministic if reproducibility needed
+        # disable benchmark and enable deterministic if reproducibility needed
         torch.backends.cudnn.benchmark = True
         torch.backends.cudnn.deterministic = False
 
@@ -277,7 +277,7 @@ def main():
         print(f"🔧 FP16 reduced precision reduction disabled")
 
     # Global flag to disable mixed precision training
-    use_mixed_precision = True  # TODO: disable if numerical instability occurs
+    use_mixed_precision = True  # disable if numerical instability occurs
 
     # Check for mixed precision support
     use_bf16 = False
@@ -345,9 +345,9 @@ def main():
     #   alpha = 1.0: Uniform [0,1], any mixing ratio equally likely
     #   alpha = 2.0: Bell-shaped, λ clusters around 0.5 (always ~50/50 mix)
     #
-    mixup_alpha = 0.8       # TODO: tune alpha if needed (0.2-1.0 range)
-    cutmix_alpha = 1.0      # TODO: tune alpha if needed (0.2-1.0 range)
-    mix_prob = 0.1          # TODO: Probability of applying MixUp or CutMix to each batch
+    mixup_alpha = 0.8       # tune alpha if needed (0.2-1.0 range)
+    cutmix_alpha = 1.0      # tune alpha if needed (0.2-1.0 range)
+    mix_prob = 1.0          # TODO: Probability of applying MixUp or CutMix to each batch
                             # Want to avoid bimodal training e.g. hard labels w/o cutmix vs soft labels with
     mix_switch_prob = 0.5   # When both enabled: P(CutMix) vs P(MixUp). 0.5 = equal chance
     mix_mode = 'batch'      # 'batch': same λ for all samples (fast)
@@ -488,8 +488,9 @@ def main():
         # Why: Forces model to use context, prevents overfitting to specific features
         # p=0.1 (10% chance), scale=(0.02, 0.1) means 2-10% of image area erased
         # Applied AFTER normalization, so erased regions have random normalized values
-        T.RandomErasing(p=random_erasing_prob), #scale=(0.02, 0.1)), # TODO: this is very conserative, usually T.RandomErasing(p=0.5, scale=(0.02, 0.33))
-                                                                   # or more aggressive T.RandomErasing(p=0.6, scale=(0.02, 0.4))
+        T.RandomErasing(p=random_erasing_prob), #scale=(0.02, 0.1)), 
+                            # this is very conserative, usually T.RandomErasing(p=0.5, scale=(0.02, 0.33))
+                            # or more aggressive T.RandomErasing(p=0.6, scale=(0.02, 0.4))
     ])
 
     # Define the preprocessing pipeline for evaluation images (no heavy augmentation)
@@ -543,7 +544,7 @@ def main():
     print(f"✅ Training samples: {len(train_dataset):,}")
     print(f"✅ Validation samples: {len(eval_dataset):,}")
     
-    use_prelu = True # TODO: Re-enable PReLU (set to True) to prevent dying ReLU in conv5 (conv5.0 output_std=0.0245 due to ReLU killing negative values)
+    use_prelu = True # Re-enable PReLU (set to True) to prevent dying ReLU in conv5 (conv5.0 output_std=0.0245 due to ReLU killing negative values)
                        # PReLU allows negative values to pass through (scaled by alpha), preventing dead neurons
                        # Combined with ReZero scaling, this should stabilize conv5 training
 
@@ -556,7 +557,7 @@ def main():
     # Create CNN model
     activation_type = "PReLU" if use_prelu else "ReLU"
     bn_momentum = 0.1  # Batch normalization momentum (lower = more stable running stats)
-                        # TODO: adjusting this value between 0.01 and 0.1 (default) to avoid invalid batch norm stats
+                        # adjusting this value between 0.01 and 0.1 (default) to avoid invalid batch norm stats
     print(f"\n🏗️ Creating {activation_type} CNN model ({1000} classes)...")
     print(f"🔧 Activation function: {activation_type}")
     print(f"🔧 BatchNorm momentum: {bn_momentum}")
@@ -566,7 +567,7 @@ def main():
     # Recomputes activations during backward pass instead of storing them
     # Reduces memory ~50-70%, allowing larger batch sizes
     # Cost: ~20-30% slower per step, but larger batches = fewer steps overall
-    use_gradient_checkpointing = False # TODO: seeing if we need this
+    use_gradient_checkpointing = False
 
     model = CNN(
         use_prelu=use_prelu,
@@ -610,7 +611,7 @@ def main():
     # Compiles the model into optimized kernels using TorchDynamo + TorchInductor
     # Note: "reduce-overhead" mode uses CUDAGraphs which can cause issues with in-place ops
     # Using "default" mode instead to avoid CUDAGraphs overwrite errors
-    use_torch_compile = True  # TODO: disable if compilation issues occur
+    use_torch_compile = True  # disable if compilation issues occur
     if use_torch_compile and hasattr(torch, 'compile'):
         print("🔧 Compiling model with torch.compile()...")
         # Use "default" mode instead of "reduce-overhead" to avoid CUDAGraphs issues
@@ -628,10 +629,7 @@ def main():
     print(f"  Total parameters: {total_params:,}")
     print(f"  Trainable parameters: {trainable_params:,}")
     
-    # With gradient checkpointing enabled, we can fit larger batches
-    # Try 512 per GPU with grad_accum=2 for effective batch 1024
-    # If OOM, reduce to 384 or back to 256
-    batch_size_per_gpu = 512 # TODO: tuning
+    batch_size_per_gpu = 512
     grad_accum = 2  # Fewer accumulation steps = faster training
     
     # Check if we want to resume from a checkpoint
@@ -683,7 +681,7 @@ def main():
     else:
         # Original training configuration
         # 100 epochs is standard for ResNet-50 (300 is for ViT/DeiT)
-        num_epochs = 300 # TODO: evaluating different values
+        num_epochs = 300
         output_dir = base_output_dir
         print(f"🆕 Starting fresh training for {num_epochs} epochs")
         print(f"   Output directory: {output_dir}") 
@@ -768,11 +766,11 @@ def main():
     #   - Our batch: 1024
     #   - Scaled lr: 0.001 × (1024/256) = 0.004
     effective_batch_size = batch_size_per_gpu * grad_accum
-    base_lr = 0.0005  # TODO: tuning
+    base_lr = 0.0003  # TODO: tuning (values adjusted from 0.0005)
     initial_lr = base_lr * (effective_batch_size / 256)
 
     # DeiT-B warmup: 5 epochs
-    warmup_epochs = 5
+    warmup_epochs = 10 # TODO: tuning (values adjusted from 10)
     warmup_ratio = warmup_epochs / num_epochs  # 5/300 ≈ 0.0167
 
     if resume:
@@ -787,7 +785,8 @@ def main():
         per_device_train_batch_size=batch_size_per_gpu,  # Reduced for stability
         per_device_eval_batch_size=batch_size_per_gpu,
         learning_rate=initial_lr,
-        weight_decay=0.05,  # DeiT-B uses 0.05
+        weight_decay=0.03,  # DeiT-B uses 0.05
+                            # TODO: Down from 0.05 (maintains ~100:1 ratio with lower LR)
         warmup_ratio=warmup_ratio,  # Dynamic warmup based on resume status
         gradient_accumulation_steps=grad_accum,
         eval_steps=1,
@@ -797,7 +796,7 @@ def main():
         logging_dir="./logs/logs" if not disable_logging else None,
         remove_unused_columns=False, # Fix for custom dataset format
         dataloader_num_workers=16,      # Parallel data loading
-        dataloader_persistent_workers=False,     # TODO: disable if OOM issues occur (keeps workers alive between epochs)
+        dataloader_persistent_workers=False,     # disable if OOM issues occur (keeps workers alive between epochs)
                                                 # IMPORTANT: it looks we were getting oom-killed leaving these alive on a 128GB mem system
         dataloader_pin_memory=True,     # If True, the DataLoader will copy Tensors into CUDA pinned memory before returning them.
                                         # This can speed up host-to-GPU transfer, especially for large batches.
@@ -878,12 +877,14 @@ def main():
         # Momentum just adds inertia: keep μ of last velocity (useful when directions persist, otherwise it resists),
         # then take the same downhill step −η ∇f(θ_t).
 
-        max_grad_norm=2.0,  # TODO: Some threshold required for grad stats logging without aggressive clipping
-        #lr_scheduler_type="cosine",  # TODO: DeiT-B uses cosine decay to 0
+        max_grad_norm=1.0,  # TODO: Some threshold required for grad stats logging without aggressive clipping
+                            # Adjusted from values of 2.0
+        #lr_scheduler_type="cosine",
         #Alternative: cosine with minimum LR floor
         lr_scheduler_type="cosine_with_min_lr",
         lr_scheduler_kwargs={
-            "min_lr_rate": 0.30,  # Minimum LR as ratio of initial LR (% of initial)
+            "min_lr_rate": 0.10,  # TODO: Minimum LR as ratio of initial LR (% of initial)
+                                  # Adjusted from values of 0.30
             # lr = min_lr + (initial_lr - min_lr) * (1 + cos(π * t/T)) / 2
         },
         eval_strategy="epoch",
@@ -895,7 +896,7 @@ def main():
         greater_is_better=False,
         prediction_loss_only=False,
         label_names=["labels"], # need this to get eval_loss
-        label_smoothing_factor=0.0,  # TODO: re-enable only when MixUp/CutMix disabled
+        label_smoothing_factor=0.0,  # re-enable only when MixUp/CutMix disabled
         report_to="tensorboard" if not disable_logging else "none",
     )
 
