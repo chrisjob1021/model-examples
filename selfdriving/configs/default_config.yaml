@@ -1,0 +1,62 @@
+data:
+  waymo_path: "~/waymo"
+  train_files: "training/*.tfrecord"
+  test_files: "testing/*.tfrecord"
+  batch_size: 32
+  num_workers: 4
+  shuffle: true
+  
+  # Trajectory settings
+  history_seconds: 3.0  # 30 frames at 10Hz
+  future_seconds: 5.0   # 50 frames at 10Hz
+  sample_rate: 10  # Hz
+  
+  # Social context
+  social_radius: 50.0  # meters
+  max_neighbors: 32
+  grid_size: [13, 3]  # Social tensor grid
+
+model:
+  # LSTM settings
+  input_dim: 4  # x, y, vx, vy
+  hidden_dim: 256
+  num_layers: 2
+  dropout: 0.1
+  
+  # Social pooling
+  social_conv_channels: [64, 128, 256]
+  social_kernel_size: 3
+  
+  # Output
+  num_modes: 3  # Multi-modal predictions
+  output_dim: 2  # x, y positions
+
+training:
+  epochs: 100
+  learning_rate: 0.001
+  lr_scheduler: "cosine"
+  lr_warmup_epochs: 5
+  weight_decay: 0.0001
+  
+  # Loss weights
+  trajectory_weight: 1.0
+  nll_weight: 0.5
+  
+  # Checkpointing
+  checkpoint_interval: 5
+  keep_best_k: 3
+  resume_from: null
+
+visualization:
+  save_interval: 10  # Save visualizations every N batches
+  fps: 10
+  figure_size: [12, 8]
+  trajectory_colors:
+    history: "blue"
+    ground_truth: "green"
+    prediction: "red"
+  
+logging:
+  tensorboard: true
+  log_interval: 10  # Log every N batches
+  project_name: "waymo_csp_model"

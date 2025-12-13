@@ -1,0 +1,9 @@
+.venv*
+*__pycache__*
+.vscode/
+*.egg-info/
+processed_datasets/
+results/
+logs/
+selfdriving/waymo/
+*.DS_Store
