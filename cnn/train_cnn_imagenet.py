@@ -885,7 +885,7 @@ def main():
         #Alternative: cosine with minimum LR floor
         lr_scheduler_type="cosine_with_min_lr",
         lr_scheduler_kwargs={
-            "min_lr_rate": 0,  # TODO: Minimum LR as ratio of initial LR (% of initial)
+            "min_lr_rate": 0.05,  # TODO: Minimum LR as ratio of initial LR (% of initial)
                                   # Adjusted from values of 0.30, 0.10
             # lr = min_lr + (initial_lr - min_lr) * (1 + cos(π * t/T)) / 2
         },
