@@ -345,13 +345,6 @@ def main():
     #   alpha = 1.0: Uniform [0,1], any mixing ratio equally likely
     #   alpha = 2.0: Bell-shaped, λ clusters around 0.5 (always ~50/50 mix)
     #
-<<<<<<< Updated upstream
-    mixup_alpha = 0.4       # TODO: tune alpha if needed (0.2-1.0 range) from 0.8, 0.4 (last)
-                            # Can try - original ResNet value of 0.2
-    cutmix_alpha = 1.0      # TODO: tune alpha if needed (0.2-1.0 range) from 1.0, 0.5 (last)
-                            # 1.0 is standard, uniform distributions 
-    mix_prob = 1.0          # Probability of applying MixUp or CutMix to each batch
-=======
     # MIXUP ALPHA - CNNs vs Transformers:
     #   Original MixUp paper (Zhang et al., 2017) used alpha=0.2 for ResNet on ImageNet.
     #   DeiT (Vision Transformer) uses alpha=0.8.
@@ -394,10 +387,9 @@ def main():
     #   - Improves localization - network must find where each object is, not just that it exists
     #   - Regularizes against overconfident predictions on ambiguous inputs
     #
-    mixup_alpha = 0.4       # TODO: tune alpha if needed (0.2-1.0 range) from 0.8
-    cutmix_alpha = 0.5      # TODO: tune alpha if needed (0.2-1.0 range) from 1.0
+    mixup_alpha = 0.2       # TODO: tune alpha if needed (0.2-1.0 range) from 0.8, 0.4
+    cutmix_alpha = 1.0      # TODO: tune alpha if needed (0.2-1.0 range) from 1.0
     mix_prob = 1.0          # TODO: Probability of applying MixUp or CutMix to each batch
->>>>>>> Stashed changes
                             # Want to avoid bimodal training e.g. hard labels w/o cutmix vs soft labels with
     mix_switch_prob = 0.5   # When both enabled: P(CutMix) vs P(MixUp). 0.5 = equal chance
     mix_mode = 'batch'      # 'batch': same λ for all samples (fast)
@@ -600,15 +592,6 @@ def main():
 
     # Stochastic depth (DropPath) rate
     # Reference: "Deep Networks with Stochastic Depth" (Huang et al., 2016)
-<<<<<<< Updated upstream
-    # Drop rate increases linearly from 0 at first block to this value at last block
-    # 0.1 = 10% drop probability at the deepest block (90% survival)
-    drop_path_rate = 0.1    # TODO: tuning
-                            #   - ResNet-50: 0.0 - 0.1
-                            #   - ResNet-152: 0.1 - 0.2
-                            #   - DeiT-Base: 0.1
-                            #   - Swin-Base: 0.5
-=======
     #
     # HOW IT WORKS:
     # In a residual block: output = x + F(x), where F(x) is the main path (convs, BN, etc.)
@@ -642,7 +625,6 @@ def main():
     #   0.15+: Heavy, may hurt ResNet-50 performance
     # (Deeper models like Swin-Base use 0.3-0.5)
     drop_path_rate = 0.1
->>>>>>> Stashed changes
 
     # Create CNN model
     activation_type = "PReLU" if use_prelu else "ReLU"
