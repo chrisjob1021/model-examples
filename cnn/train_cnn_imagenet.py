@@ -378,8 +378,14 @@ def main():
     #   - When the 3x3 filter slides over the "cat" region, it detects cat features (fur texture, ears)
     #   - When the same filter slides over the "car" region, it detects car features (metal, wheels)
     #   - Both sets of features flow through the network and contribute to the final prediction
+    #
+    #   Gradient flow from soft labels:
     #   - The soft label (e.g., 0.7 cat + 0.3 car) teaches the network to output BOTH classes
-    #     proportional to how much of each object is visible
+    #   - During backprop, gradient flows proportionally: 70% of the loss gradient updates
+    #     cat-detecting filters, 30% updates car-detecting filters
+    #   - This means filters for BOTH classes get trained on every CutMix sample
+    #   - Without soft labels (hard label = cat), car filters would get zero gradient even
+    #     though 30% of the image contains car features - wasted training signal
     #
     #   This creates a powerful training signal:
     #   - Forces the network to recognize objects from partial views (only 70% of cat visible)
