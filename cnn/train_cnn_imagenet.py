@@ -345,11 +345,59 @@ def main():
     #   alpha = 1.0: Uniform [0,1], any mixing ratio equally likely
     #   alpha = 2.0: Bell-shaped, λ clusters around 0.5 (always ~50/50 mix)
     #
+<<<<<<< Updated upstream
     mixup_alpha = 0.4       # TODO: tune alpha if needed (0.2-1.0 range) from 0.8, 0.4 (last)
                             # Can try - original ResNet value of 0.2
     cutmix_alpha = 1.0      # TODO: tune alpha if needed (0.2-1.0 range) from 1.0, 0.5 (last)
                             # 1.0 is standard, uniform distributions 
     mix_prob = 1.0          # Probability of applying MixUp or CutMix to each batch
+=======
+    # MIXUP ALPHA - CNNs vs Transformers:
+    #   Original MixUp paper (Zhang et al., 2017) used alpha=0.2 for ResNet on ImageNet.
+    #   DeiT (Vision Transformer) uses alpha=0.8.
+    #
+    #   Why CNNs use lower alpha (less aggressive blending):
+    #   - CNNs have LOCAL receptive fields - each neuron sees only a small patch (e.g., 3x3)
+    #   - When two images are blended pixel-wise, local patterns become incoherent noise
+    #   - A cat ear blended with a car wheel at 50/50 doesn't look like either - just blur
+    #   - Lower alpha (0.2) keeps λ near 0 or 1, so one image dominates and local patterns survive
+    #
+    #   Why Transformers tolerate higher alpha:
+    #   - Self-attention has GLOBAL receptive fields - each token attends to all other tokens
+    #   - Can learn to aggregate information across the blended image holistically
+    #   - 50/50 blends still provide useful training signal because attention can find
+    #     coherent patches from either source image anywhere in the input
+    #
+    #   Typical values: ResNet=0.2, DeiT=0.8, current=0.4 (middle ground)
+    #
+    # CUTMIX ALPHA:
+    #   Alpha=1.0 is standard for both CNNs and Transformers.
+    #   With Beta(1,1) = Uniform[0,1], the cut patch can be any size from 0% to 100% of the image.
+    #
+    #   Why CutMix works better than MixUp for CNNs:
+    #   - Instead of blending pixels (which destroys local patterns), CutMix PASTES a rectangular
+    #     region from image B onto image A
+    #   - Local patterns are preserved within each region - the cat ear stays a cat ear,
+    #     the car wheel stays a car wheel, they just coexist in different spatial regions
+    #
+    #   How CNNs learn from both regions independently:
+    #   - Conv filters slide across the ENTIRE image, processing each spatial location
+    #   - When the 3x3 filter slides over the "cat" region, it detects cat features (fur texture, ears)
+    #   - When the same filter slides over the "car" region, it detects car features (metal, wheels)
+    #   - Both sets of features flow through the network and contribute to the final prediction
+    #   - The soft label (e.g., 0.7 cat + 0.3 car) teaches the network to output BOTH classes
+    #     proportional to how much of each object is visible
+    #
+    #   This creates a powerful training signal:
+    #   - Forces the network to recognize objects from partial views (only 70% of cat visible)
+    #   - Teaches calibrated uncertainty - "I see mostly cat but also some car"
+    #   - Improves localization - network must find where each object is, not just that it exists
+    #   - Regularizes against overconfident predictions on ambiguous inputs
+    #
+    mixup_alpha = 0.4       # TODO: tune alpha if needed (0.2-1.0 range) from 0.8
+    cutmix_alpha = 0.5      # TODO: tune alpha if needed (0.2-1.0 range) from 1.0
+    mix_prob = 1.0          # TODO: Probability of applying MixUp or CutMix to each batch
+>>>>>>> Stashed changes
                             # Want to avoid bimodal training e.g. hard labels w/o cutmix vs soft labels with
     mix_switch_prob = 0.5   # When both enabled: P(CutMix) vs P(MixUp). 0.5 = equal chance
     mix_mode = 'batch'      # 'batch': same λ for all samples (fast)
@@ -552,6 +600,7 @@ def main():
 
     # Stochastic depth (DropPath) rate
     # Reference: "Deep Networks with Stochastic Depth" (Huang et al., 2016)
+<<<<<<< Updated upstream
     # Drop rate increases linearly from 0 at first block to this value at last block
     # 0.1 = 10% drop probability at the deepest block (90% survival)
     drop_path_rate = 0.1    # TODO: tuning
@@ -559,6 +608,41 @@ def main():
                             #   - ResNet-152: 0.1 - 0.2
                             #   - DeiT-Base: 0.1
                             #   - Swin-Base: 0.5
+=======
+    #
+    # HOW IT WORKS:
+    # In a residual block: output = x + F(x), where F(x) is the main path (convs, BN, etc.)
+    # With drop path:      output = x + mask * F(x), where mask ∈ {0, 1} is sampled per-sample
+    #
+    # When mask=0, the entire bottleneck block is skipped - input passes straight through
+    # the skip connection. This forces the network to learn redundant representations
+    # across blocks, so no single block becomes critical (similar to how Dropout
+    # prevents reliance on individual neurons, but at the block level).
+    #
+    # PER-SAMPLE DROPPING:
+    # Within a batch, each sample independently decides which blocks to drop:
+    #   - Sample 1 might skip blocks [3, 7, 12]
+    #   - Sample 2 might skip blocks [5, 9]
+    # This creates an implicit ensemble of many sub-networks during training.
+    #
+    # LINEAR SCHEDULE:
+    # Drop probability increases linearly with depth:
+    #   - Block 1: p_drop = 0 (never dropped, early features always needed)
+    #   - Block L: p_drop = drop_path_rate (deepest blocks most likely to drop)
+    #
+    # SCALING (modern "inverted dropout" style):
+    # During training: output = x + (mask / p_survival) * F(x)  # scale UP when kept
+    # During inference: output = x + F(x)                        # no scaling needed
+    # This keeps expected values consistent without modifying inference.
+    #
+    # TYPICAL VALUES FOR RESNET-50:
+    #   0.0:  No drop path (classic ResNet training)
+    #   0.05: Light regularization
+    #   0.1:  Moderate (current setting)
+    #   0.15+: Heavy, may hurt ResNet-50 performance
+    # (Deeper models like Swin-Base use 0.3-0.5)
+    drop_path_rate = 0.1
+>>>>>>> Stashed changes
 
     # Create CNN model
     activation_type = "PReLU" if use_prelu else "ReLU"
