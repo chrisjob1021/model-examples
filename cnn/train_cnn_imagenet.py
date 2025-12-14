@@ -345,9 +345,11 @@ def main():
     #   alpha = 1.0: Uniform [0,1], any mixing ratio equally likely
     #   alpha = 2.0: Bell-shaped, λ clusters around 0.5 (always ~50/50 mix)
     #
-    mixup_alpha = 0.4       # TODO: tune alpha if needed (0.2-1.0 range) from 0.8
-    cutmix_alpha = 0.5      # TODO: tune alpha if needed (0.2-1.0 range) from 1.0
-    mix_prob = 1.0          # TODO: Probability of applying MixUp or CutMix to each batch
+    mixup_alpha = 0.4       # TODO: tune alpha if needed (0.2-1.0 range) from 0.8, 0.4 (last)
+                            # Can try - original ResNet value of 0.2
+    cutmix_alpha = 1.0      # TODO: tune alpha if needed (0.2-1.0 range) from 1.0, 0.5 (last)
+                            # 1.0 is standard, uniform distributions 
+    mix_prob = 1.0          # Probability of applying MixUp or CutMix to each batch
                             # Want to avoid bimodal training e.g. hard labels w/o cutmix vs soft labels with
     mix_switch_prob = 0.5   # When both enabled: P(CutMix) vs P(MixUp). 0.5 = equal chance
     mix_mode = 'batch'      # 'batch': same λ for all samples (fast)
@@ -552,7 +554,11 @@ def main():
     # Reference: "Deep Networks with Stochastic Depth" (Huang et al., 2016)
     # Drop rate increases linearly from 0 at first block to this value at last block
     # 0.1 = 10% drop probability at the deepest block (90% survival)
-    drop_path_rate = 0.1
+    drop_path_rate = 0.1    # TODO: tuning
+                            #   - ResNet-50: 0.0 - 0.1
+                            #   - ResNet-152: 0.1 - 0.2
+                            #   - DeiT-Base: 0.1
+                            #   - Swin-Base: 0.5
 
     # Create CNN model
     activation_type = "PReLU" if use_prelu else "ReLU"
@@ -767,11 +773,11 @@ def main():
     #   - Our batch: 1024
     #   - Scaled lr: 0.001 × (1024/256) = 0.004
     effective_batch_size = batch_size_per_gpu * grad_accum
-    base_lr = 0.0001  # TODO: tuning (values adjusted from 0.0005)
+    base_lr = 0.0002  # TODO: tuning values adjusted from 0.0005, 0.0001 (last)
     initial_lr = base_lr * (effective_batch_size / 256)
 
     # DeiT-B warmup: 5 epochs
-    warmup_epochs = 20 # TODO: tuning (values adjusted from 5, 10)
+    warmup_epochs = 10 # TODO: tuning values adjusted from 5, 10, 20 (last) 
     warmup_ratio = warmup_epochs / num_epochs  # 5/300 ≈ 0.0167
 
     if resume:
@@ -786,9 +792,8 @@ def main():
         per_device_train_batch_size=batch_size_per_gpu,  # Reduced for stability
         per_device_eval_batch_size=batch_size_per_gpu,
         learning_rate=initial_lr,
-        weight_decay=0.01,  # DeiT-B uses 0.05
-                            # TODO: Down from 0.05 (maintains ~100:1 ratio with lower LR)
-                            # from 0.03
+        weight_decay=0.02,  # DeiT-B uses 0.05
+                            # TODO: maintains ~100:1 ratio with lower LR
         warmup_ratio=warmup_ratio,  # Dynamic warmup based on resume status
         gradient_accumulation_steps=grad_accum,
         eval_steps=1,
@@ -879,14 +884,15 @@ def main():
         # Momentum just adds inertia: keep μ of last velocity (useful when directions persist, otherwise it resists),
         # then take the same downhill step −η ∇f(θ_t).
 
-        max_grad_norm=0.5,  # TODO: Some threshold required for grad stats logging without aggressive clipping
-                            # Adjusted from values of 2.0, 1.0
+        max_grad_norm=1.0,  # TODO: Some threshold required for grad stats logging without aggressive clipping
+                            # Adjusted from values of 2.0, 1.0, 0.5 (last)
         #lr_scheduler_type="cosine",
         #Alternative: cosine with minimum LR floor
         lr_scheduler_type="cosine_with_min_lr",
         lr_scheduler_kwargs={
-            "min_lr_rate": 0.05,  # TODO: Minimum LR as ratio of initial LR (% of initial)
-                                  # Adjusted from values of 0.30, 0.10
+            "min_lr_rate": 0.01,  # TODO: Minimum LR as ratio of initial LR (% of initial)
+                                  # Trying lower floor for late stage fine tuning
+                                  # Adjusted from values of 0.30, 0.10, 0.05
             # lr = min_lr + (initial_lr - min_lr) * (1 + cos(π * t/T)) / 2
         },
         eval_strategy="epoch",
