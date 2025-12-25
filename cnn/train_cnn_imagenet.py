@@ -345,8 +345,56 @@ def main():
     #   alpha = 1.0: Uniform [0,1], any mixing ratio equally likely
     #   alpha = 2.0: Bell-shaped, λ clusters around 0.5 (always ~50/50 mix)
     #
-    mixup_alpha = 0.4       # TODO: tune alpha if needed (0.2-1.0 range) from 0.8
-    cutmix_alpha = 0.5      # TODO: tune alpha if needed (0.2-1.0 range) from 1.0
+    # MIXUP ALPHA - CNNs vs Transformers:
+    #   Original MixUp paper (Zhang et al., 2017) used alpha=0.2 for ResNet on ImageNet.
+    #   DeiT (Vision Transformer) uses alpha=0.8.
+    #
+    #   Why CNNs use lower alpha (less aggressive blending):
+    #   - CNNs have LOCAL receptive fields - each neuron sees only a small patch (e.g., 3x3)
+    #   - When two images are blended pixel-wise, local patterns become incoherent noise
+    #   - A cat ear blended with a car wheel at 50/50 doesn't look like either - just blur
+    #   - Lower alpha (0.2) keeps λ near 0 or 1, so one image dominates and local patterns survive
+    #
+    #   Why Transformers tolerate higher alpha:
+    #   - Self-attention has GLOBAL receptive fields - each token attends to all other tokens
+    #   - Can learn to aggregate information across the blended image holistically
+    #   - 50/50 blends still provide useful training signal because attention can find
+    #     coherent patches from either source image anywhere in the input
+    #
+    #   Typical values: ResNet=0.2, DeiT=0.8, current=0.4 (middle ground)
+    #
+    # CUTMIX ALPHA:
+    #   Alpha=1.0 is standard for both CNNs and Transformers.
+    #   With Beta(1,1) = Uniform[0,1], the cut patch can be any size from 0% to 100% of the image.
+    #
+    #   Why CutMix works better than MixUp for CNNs:
+    #   - Instead of blending pixels (which destroys local patterns), CutMix PASTES a rectangular
+    #     region from image B onto image A
+    #   - Local patterns are preserved within each region - the cat ear stays a cat ear,
+    #     the car wheel stays a car wheel, they just coexist in different spatial regions
+    #
+    #   How CNNs learn from both regions independently:
+    #   - Conv filters slide across the ENTIRE image, processing each spatial location
+    #   - When the 3x3 filter slides over the "cat" region, it detects cat features (fur texture, ears)
+    #   - When the same filter slides over the "car" region, it detects car features (metal, wheels)
+    #   - Both sets of features flow through the network and contribute to the final prediction
+    #
+    #   Gradient flow from soft labels:
+    #   - The soft label (e.g., 0.7 cat + 0.3 car) teaches the network to output BOTH classes
+    #   - During backprop, gradient flows proportionally: 70% of the loss gradient updates
+    #     cat-detecting filters, 30% updates car-detecting filters
+    #   - This means filters for BOTH classes get trained on every CutMix sample
+    #   - Without soft labels (hard label = cat), car filters would get zero gradient even
+    #     though 30% of the image contains car features - wasted training signal
+    #
+    #   This creates a powerful training signal:
+    #   - Forces the network to recognize objects from partial views (only 70% of cat visible)
+    #   - Teaches calibrated uncertainty - "I see mostly cat but also some car"
+    #   - Improves localization - network must find where each object is, not just that it exists
+    #   - Regularizes against overconfident predictions on ambiguous inputs
+    #
+    mixup_alpha = 0.2       # TODO: tune alpha if needed (0.2-1.0 range) from 0.8, 0.4
+    cutmix_alpha = 1.0      # TODO: tune alpha if needed (0.2-1.0 range) from 1.0
     mix_prob = 1.0          # TODO: Probability of applying MixUp or CutMix to each batch
                             # Want to avoid bimodal training e.g. hard labels w/o cutmix vs soft labels with
     mix_switch_prob = 0.5   # When both enabled: P(CutMix) vs P(MixUp). 0.5 = equal chance
@@ -550,8 +598,38 @@ def main():
 
     # Stochastic depth (DropPath) rate
     # Reference: "Deep Networks with Stochastic Depth" (Huang et al., 2016)
-    # Drop rate increases linearly from 0 at first block to this value at last block
-    # 0.1 = 10% drop probability at the deepest block (90% survival)
+    #
+    # HOW IT WORKS:
+    # In a residual block: output = x + F(x), where F(x) is the main path (convs, BN, etc.)
+    # With drop path:      output = x + mask * F(x), where mask ∈ {0, 1} is sampled per-sample
+    #
+    # When mask=0, the entire bottleneck block is skipped - input passes straight through
+    # the skip connection. This forces the network to learn redundant representations
+    # across blocks, so no single block becomes critical (similar to how Dropout
+    # prevents reliance on individual neurons, but at the block level).
+    #
+    # PER-SAMPLE DROPPING:
+    # Within a batch, each sample independently decides which blocks to drop:
+    #   - Sample 1 might skip blocks [3, 7, 12]
+    #   - Sample 2 might skip blocks [5, 9]
+    # This creates an implicit ensemble of many sub-networks during training.
+    #
+    # LINEAR SCHEDULE:
+    # Drop probability increases linearly with depth:
+    #   - Block 1: p_drop = 0 (never dropped, early features always needed)
+    #   - Block L: p_drop = drop_path_rate (deepest blocks most likely to drop)
+    #
+    # SCALING (modern "inverted dropout" style):
+    # During training: output = x + (mask / p_survival) * F(x)  # scale UP when kept
+    # During inference: output = x + F(x)                        # no scaling needed
+    # This keeps expected values consistent without modifying inference.
+    #
+    # TYPICAL VALUES FOR RESNET-50:
+    #   0.0:  No drop path (classic ResNet training)
+    #   0.05: Light regularization
+    #   0.1:  Moderate (current setting)
+    #   0.15+: Heavy, may hurt ResNet-50 performance
+    # (Deeper models like Swin-Base use 0.3-0.5)
     drop_path_rate = 0.1
 
     # Create CNN model
@@ -767,11 +845,11 @@ def main():
     #   - Our batch: 1024
     #   - Scaled lr: 0.001 × (1024/256) = 0.004
     effective_batch_size = batch_size_per_gpu * grad_accum
-    base_lr = 0.0001  # TODO: tuning (values adjusted from 0.0005)
+    base_lr = 0.0002  # TODO: tuning values adjusted from 0.0005, 0.0001 (last)
     initial_lr = base_lr * (effective_batch_size / 256)
 
     # DeiT-B warmup: 5 epochs
-    warmup_epochs = 20 # TODO: tuning (values adjusted from 5, 10)
+    warmup_epochs = 10 # TODO: tuning values adjusted from 5, 10, 20 (last) 
     warmup_ratio = warmup_epochs / num_epochs  # 5/300 ≈ 0.0167
 
     if resume:
@@ -786,9 +864,8 @@ def main():
         per_device_train_batch_size=batch_size_per_gpu,  # Reduced for stability
         per_device_eval_batch_size=batch_size_per_gpu,
         learning_rate=initial_lr,
-        weight_decay=0.01,  # DeiT-B uses 0.05
-                            # TODO: Down from 0.05 (maintains ~100:1 ratio with lower LR)
-                            # from 0.03
+        weight_decay=0.02,  # DeiT-B uses 0.05
+                            # TODO: maintains ~100:1 ratio with lower LR
         warmup_ratio=warmup_ratio,  # Dynamic warmup based on resume status
         gradient_accumulation_steps=grad_accum,
         eval_steps=1,
@@ -879,14 +956,15 @@ def main():
         # Momentum just adds inertia: keep μ of last velocity (useful when directions persist, otherwise it resists),
         # then take the same downhill step −η ∇f(θ_t).
 
-        max_grad_norm=0.5,  # TODO: Some threshold required for grad stats logging without aggressive clipping
-                            # Adjusted from values of 2.0, 1.0
+        max_grad_norm=1.0,  # TODO: Some threshold required for grad stats logging without aggressive clipping
+                            # Adjusted from values of 2.0, 1.0, 0.5 (last)
         #lr_scheduler_type="cosine",
         #Alternative: cosine with minimum LR floor
         lr_scheduler_type="cosine_with_min_lr",
         lr_scheduler_kwargs={
-            "min_lr_rate": 0.05,  # TODO: Minimum LR as ratio of initial LR (% of initial)
-                                  # Adjusted from values of 0.30, 0.10
+            "min_lr_rate": 0.01,  # TODO: Minimum LR as ratio of initial LR (% of initial)
+                                  # Trying lower floor for late stage fine tuning
+                                  # Adjusted from values of 0.30, 0.10, 0.05
             # lr = min_lr + (initial_lr - min_lr) * (1 + cos(π * t/T)) / 2
         },
         eval_strategy="epoch",
