@@ -76,6 +76,32 @@ def create_model_card(
         if top5_acc is not None:
             accuracy_info += f"- **Top-5 Accuracy**: {top5_acc:.2f}%\n"
 
+        # Add comparison table if we have accuracy metrics
+        if top1_acc is not None:
+            top1_error = 100 - top1_acc
+            top5_error = 100 - top5_acc if top5_acc else None
+
+            accuracy_info += f"- **Top-1 Error**: {top1_error:.2f}%\n"
+            if top5_error is not None:
+                accuracy_info += f"- **Top-5 Error**: {top5_error:.2f}%\n"
+
+            accuracy_info += "\n### Comparison with ImageNet Benchmarks\n\n"
+            accuracy_info += "| Model | Top-1 | Top-5 | Parameters | Year | Notes |\n"
+            accuracy_info += "|-------|-------|-------|------------|------|-------|\n"
+            accuracy_info += "| AlexNet | 57.0% | 80.3% | 60M | 2012 | First deep CNN |\n"
+            accuracy_info += "| VGG-16 | 71.5% | 90.1% | 138M | 2014 | Deep with small filters |\n"
+            accuracy_info += "| **ResNet-50** | **76.0%** | **93.0%** | **25M** | **2015** | **Baseline** |\n"
+            accuracy_info += "| ResNet-152 | 78.3% | 94.3% | 60M | 2015 | Deeper variant |\n"
+            accuracy_info += "| Inception-v3 | 78.0% | 93.9% | 24M | 2015 | Multi-scale |\n"
+
+            top5_str = f"{top5_acc:.2f}%" if top5_acc else "N/A"
+            accuracy_info += f"| **This model** | **{top1_acc:.2f}%** | **{top5_str}** | **~23M** | **2025** | **{activation}** |\n"
+
+            # Add achievement highlights if beating ResNet-50
+            if top1_acc > 76.0:
+                improvement = top1_acc - 76.0
+                accuracy_info += f"\n**Key Achievement**: +{improvement:.2f}% improvement over ResNet-50 baseline\n"
+
     model_card = f"""---
 license: mit
 tags:
@@ -146,25 +172,73 @@ with torch.no_grad():
 
 ## Training Procedure
 
-This model was trained using:
-- Mixed precision training (fp16)
-- MixUp and CutMix augmentation
-- AdamW optimizer with cosine learning rate schedule
-- Gradient accumulation for effective large batch training
+This model was trained on ImageNet-1k using advanced techniques:
+
+### Optimization
+- **Optimizer**: AdamW (weight_decay=0.02)
+- **Learning Rate**: 0.1 with 10-epoch warmup
+- **Schedule**: Cosine annealing
+- **Batch Size**: 1024 effective (512 per GPU × 2 gradient accumulation)
+- **Mixed Precision**: fp16 for efficiency
+
+### Data Augmentation
+- **MixUp** (α=0.2, prob=50%): Linearly combines pairs of images and labels [[Zhang et al., 2017]](https://arxiv.org/abs/1710.09412)
+- **CutMix** (α=1.0, prob=50%): Replaces image regions with patches from other images [[Yun et al., 2019]](https://arxiv.org/abs/1905.04899)
+- **RandAugment** (magnitude=9, std=0.5): Automated augmentation policy [[Cubuk et al., 2020]](https://arxiv.org/abs/1909.13719)
+- **Standard**: RandomResizedCrop (224×224), random horizontal flip, color jitter, random erasing (prob=0.25)
+
+### Regularization
+- Stochastic depth (drop_path_rate=0.1)
+- Label smoothing (via MixUp/CutMix)
+- Weight decay
+- Batch normalization
 
 ## Model Architecture
 
+### ResNet-50 with {activation}
+
 ```
 CNN(
-  conv1: ConvAct (3 -> 64, 7x7)
-  conv2: 3x ResidualBlock (64 -> 256)
-  conv3: 4x ResidualBlock (256 -> 512)
-  conv4: 6x ResidualBlock (512 -> 1024)
-  conv5: 3x ResidualBlock (1024 -> 2048)
-  avgpool: AdaptiveAvgPool2d
-  fc: Linear (2048 -> {num_classes})
+  conv1: [ConvAct(3 → 64, 7×7, stride=2) + MaxPool(3×3, stride=2)]
+    Input: 224×224 → 112×112 → 56×56
+
+  conv2_x: 3× BottleneckBlock(64 → 64 → 256)
+    56×56 (no downsampling)
+
+  conv3_x: 4× BottleneckBlock(256 → 128 → 512)
+    56×56 → 28×28 (first block stride=2)
+
+  conv4_x: 6× BottleneckBlock(512 → 256 → 1024)
+    28×28 → 14×14 (first block stride=2)
+
+  conv5_x: 3× BottleneckBlock(1024 → 512 → 2048)
+    14×14 → 7×7 (first block stride=2)
+
+  avgpool: AdaptiveAvgPool2d(1×1)
+    7×7 → 1×1
+
+  fc: Linear(2048 → {num_classes})
 )
 ```
+
+**Total Layers**: 50 (1 + 3×3 + 4×3 + 6×3 + 3×3 = 49 conv + 1 fc)
+
+### Key Features
+
+- **{activation} Activation**: {'Learnable negative slope for adaptive non-linearity' if use_prelu else 'Standard ReLU activation'}
+- **Bottleneck Blocks**: 1×1 → 3×3 → 1×1 design (4× parameter reduction)
+- **Residual Connections**: Skip connections for deep network training
+- **ReZero Scaling**: Learnable residual scaling (initialized at 0)
+- **Stochastic Depth**: Linear decay DropPath (0.0 → 0.1)
+- **Batch Normalization**: Momentum=0.01 for stable statistics
+- **Global Average Pooling**: Spatial invariance, zero parameters
+
+### References
+
+- **ResNet**: He et al., ["Deep Residual Learning for Image Recognition"](https://arxiv.org/abs/1512.03385), CVPR 2016
+{'- **PReLU**: He et al., ["Delving Deep into Rectifiers"](https://arxiv.org/abs/1502.01852), ICCV 2015' if use_prelu else ''}
+- **Stochastic Depth**: Huang et al., ["Deep Networks with Stochastic Depth"](https://arxiv.org/abs/1603.09382), ECCV 2016
+- **ReZero**: Bachlechner et al., ["ReZero is All You Need"](https://arxiv.org/abs/2003.04887), UAI 2021
 
 ## Citation
 
@@ -177,6 +251,27 @@ If you use this model, please cite:
   publisher={{HuggingFace Hub}},
 }}
 ```
+"""
+
+    # Add PReLU citation if applicable
+    if use_prelu:
+        model_card += """
+### Original PReLU Paper
+
+This model uses PReLU activation. Please also cite the original paper:
+
+```bibtex
+@inproceedings{he2015delving,
+  title={Delving Deep into Rectifiers: Surpassing Human-Level Performance on ImageNet Classification},
+  author={He, Kaiming and Zhang, Xiangyu and Ren, Shaoqing and Sun, Jian},
+  booktitle={Proceedings of the IEEE International Conference on Computer Vision},
+  pages={1026--1034},
+  year={2015}
+}
+```
+"""
+
+    model_card += """
 
 ## License
 
