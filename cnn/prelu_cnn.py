@@ -732,6 +732,27 @@ class CNN(nn.Module):
 
         return self.fc(x)
 
+    def load_state_dict(self, state_dict, strict=True):
+        """Load state dict with automatic handling of torch.compile() wrapper prefix.
+
+        When a model is compiled with torch.compile(), it adds "_orig_mod." prefix to all
+        parameter names. This method automatically detects and strips this prefix.
+
+        Parameters
+        ----------
+        state_dict : dict
+            State dictionary to load
+        strict : bool, optional
+            Whether to strictly enforce that the keys in state_dict match. Defaults to True.
+        """
+        # Handle torch.compile() wrapper prefix
+        # When a model is compiled with torch.compile(), it adds "_orig_mod." prefix to all keys
+        if any(key.startswith("_orig_mod.") for key in state_dict.keys()):
+            state_dict = {k.replace("_orig_mod.", ""): v for k, v in state_dict.items()}
+
+        # Call parent class load_state_dict
+        return super().load_state_dict(state_dict, strict=strict)
+
     @classmethod
     def from_pretrained(cls, checkpoint_path, use_prelu=None, use_builtin_conv=True, prelu_channel_wise=True, num_classes=1000, device=None):
         """Load a trained CNN model from a checkpoint directory.

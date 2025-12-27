@@ -44,7 +44,7 @@ The implementation includes educational features such as manual convolution/pool
   - Saves model checkpoints to `./results`
   - Run: `python train_cnn_imagenet.py`
 
-### Evaluation
+### Evaluation & Deployment
 - **`evaluate_model.py`** - Evaluates trained models on validation set
   - Calculates top-1 and top-5 accuracy percentages
   - Automatically detects and loads latest checkpoint
@@ -52,6 +52,14 @@ The implementation includes educational features such as manual convolution/pool
   - Progress tracking with real-time metrics
   - Run: `python evaluate_model.py`
   - Configuration: Edit the script directly to change settings like batch size or limit batches for testing
+
+- **`upload_to_huggingface.py`** - Upload trained models to HuggingFace Hub
+  - Creates comprehensive model cards with training details
+  - Auto-detects latest checkpoint and activation type
+  - Includes model weights, config, and metadata
+  - Supports organization uploads and private repos
+  - Run: `python upload_to_huggingface.py --repo-name MODEL_NAME`
+  - See workflow section for detailed usage examples
 
 ### Analysis & Visualization
 - **`visualize_activations.py`** - Visualizes learned features
@@ -128,9 +136,53 @@ scripts/start_tensorboard.sh
 # Evaluate the trained model on validation set
 python evaluate_model.py
 
-# To test with limited batches or change settings, edit the configuration 
+# To test with limited batches or change settings, edit the configuration
 # variables at the top of the main() function in evaluate_model.py
 ```
+
+### 4. Upload to HuggingFace Hub
+```bash
+# First, authenticate with HuggingFace
+huggingface-cli login
+
+# Basic upload (auto-detects latest checkpoint)
+python upload_to_huggingface.py --repo-name cnn-prelu-imagenet
+
+# Upload with accuracy metrics
+python upload_to_huggingface.py \
+  --repo-name cnn-prelu-imagenet \
+  --top1-acc 76.5 \
+  --top5-acc 93.2
+
+# Upload specific checkpoint
+python upload_to_huggingface.py \
+  --repo-name cnn-prelu-imagenet \
+  --checkpoint results/cnn_results_prelu/checkpoint-375300 \
+  --top1-acc 76.5 \
+  --top5-acc 93.2
+
+# Upload to organization (private)
+python upload_to_huggingface.py \
+  --repo-name cnn-prelu-imagenet \
+  --organization your-org \
+  --private \
+  --top1-acc 76.5 \
+  --top5-acc 93.2
+```
+
+**Upload Options:**
+- `--repo-name`: Required. Name for the HuggingFace repository
+- `--checkpoint`: Optional. Path to checkpoint (defaults to latest)
+- `--top1-acc`: Optional. Top-1 accuracy for model card
+- `--top5-acc`: Optional. Top-5 accuracy for model card
+- `--organization`: Optional. Upload to HF organization
+- `--private`: Optional. Make repository private
+
+The upload includes:
+- Model weights (`model.safetensors`)
+- Configuration (`config.json`)
+- Comprehensive model card (`README.md`)
+- Training metadata (`trainer_state.json`)
 
 ## Key Features
 
@@ -141,6 +193,7 @@ python evaluate_model.py
 - **Modern Training**: Uses HuggingFace Transformers infrastructure
 - **Comprehensive Visualization**: Understand what CNNs learn at each layer
 - **Model Evaluation**: Evaluation script with top-1 and top-5 accuracy metrics
+- **HuggingFace Hub Integration**: One-command upload with auto-generated model cards
 
 ## Requirements
 
