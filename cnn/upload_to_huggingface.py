@@ -118,6 +118,8 @@ datasets:
 
 A Convolutional Neural Network (CNN) trained on ImageNet-1k with {activation} activation.
 
+**Repository**: [github.com/chrisjob1021/model-examples](https://github.com/chrisjob1021/model-examples)
+
 ## Model Description
 
 This is a ResNet-style CNN architecture featuring:
@@ -125,6 +127,7 @@ This is a ResNet-style CNN architecture featuring:
 - **Number of Classes**: {num_classes}
 - **Architecture**: Deep residual network with bottleneck blocks
 - **Training Dataset**: ImageNet-1k
+- **Code**: See `cnn/` directory in the repository for training scripts and model implementation
 
 ### Key Features
 
