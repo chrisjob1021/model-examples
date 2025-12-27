@@ -151,23 +151,23 @@ python upload_to_huggingface.py --repo-name cnn-prelu-imagenet
 # Upload with accuracy metrics
 python upload_to_huggingface.py \
   --repo-name cnn-prelu-imagenet \
-  --top1-acc 76.5 \
-  --top5-acc 93.2
+  --top1-acc 78.01 \
+  --top5-acc 93.89
 
 # Upload specific checkpoint
 python upload_to_huggingface.py \
   --repo-name cnn-prelu-imagenet \
   --checkpoint results/cnn_results_prelu/checkpoint-375300 \
-  --top1-acc 76.5 \
-  --top5-acc 93.2
+  --top1-acc 78.01 \
+  --top5-acc 93.89
 
 # Upload to organization (private)
 python upload_to_huggingface.py \
   --repo-name cnn-prelu-imagenet \
   --organization your-org \
   --private \
-  --top1-acc 76.5 \
-  --top5-acc 93.2
+  --top1-acc 78.01 \
+  --top5-acc 93.89
 ```
 
 **Upload Options:**
