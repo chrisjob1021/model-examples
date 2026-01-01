@@ -271,7 +271,8 @@ def main():
     print(f"\n📊 Loading Validation Dataset")
     print(f"   Source: HuggingFace Hub (imagenet-1k)")
     try:
-        eval_dataset = load_dataset("imagenet-1k", split="validation", trust_remote_code=True)
+        # Use specific revision to avoid re-download (same as training script)
+        eval_dataset = load_dataset("imagenet-1k", split="validation", revision="1.0.0")
     except Exception as e:
         print(f"❌ Failed to load dataset from HuggingFace: {e}")
         sys.exit(1)

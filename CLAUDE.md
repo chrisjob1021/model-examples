@@ -17,6 +17,10 @@ python train_cnn_imagenet.py         # Train on ImageNet-1k
 python evaluate_model.py             # Evaluate top-1/top-5 accuracy
 python visualize_activations.py      # Visualize learned features
 python visualize_gradients.py        # Monitor gradient flow
+python upload_to_huggingface.py      # Upload model to HuggingFace Hub
+  --repo-name MODEL_NAME             #   Example: --repo-name cnn-prelu-imagenet
+  --checkpoint PATH                  #   Optional: specify checkpoint path
+  --top1-acc ACC --top5-acc ACC      #   Optional: include accuracy in model card
 
 # Monitoring
 ./scripts/start_tensorboard.sh       # TensorBoard on localhost:6006
