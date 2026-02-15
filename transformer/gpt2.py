@@ -425,9 +425,15 @@ class GPT2(nn.Module):
         # Token + position embeddings
         tok_emb = self.wte(input_ids)    # (B, T, n_embd)
         pos_emb = self.wpe(position_ids) # (1, T, n_embd) — broadcast over batch
+        # Dropout (training only) encourages the model to use different activation
+        # paths rather than relying on a fixed subset of activations; aids generalization.
         x = self.drop(tok_emb + pos_emb)
 
         # Transformer blocks
+        # Gradient checkpointing (when enabled and training): don't store each block's
+        # intermediate activations for backward; instead recompute each block's
+        # forward pass during backward when gradients are needed. Saves memory (fewer
+        # activations stored) at the cost of extra compute (one extra forward per block).
         if self.config.gradient_checkpointing and self.training:
             from torch.utils.checkpoint import checkpoint
             for block in self.h:
@@ -443,14 +449,18 @@ class GPT2(nn.Module):
         logits = self.lm_head(x)  # (B, T, vocab_size)
 
         if labels is not None:
-            # Shift logits and labels for next-token prediction:
-            #   logits[:, :-1, :] predicts labels[:, 1:]
-            # This is the standard causal LM objective.
-            shift_logits = logits[:, :-1, :].contiguous()
-            shift_labels = labels[:, 1:].contiguous()
+            # Next-token prediction: we use logits at position t-1 to predict the
+            # token at position t (for t = 1..T-1). So logits[:, :-1, :] is aligned
+            # with labels[:, 1:]. We drop the last logit position since there is no
+            # target token after the end of the sequence.
+            shift_logits = logits[:, :-1, :].contiguous()   # (B, T-1, vocab_size)
+            shift_labels = labels[:, 1:].contiguous()       # (B, T-1)
+            # cross_entropy expects input (N, C) and target (N,). We have (B, T-1, vocab_size)
+            # and (B, T-1), so flatten: view(-1, size(-1)) keeps last dim, view(-1) flattens all.
+            # ignore_index=-100: exclude masked positions (e.g. non-assistant in SFT) from loss.
             loss = F.cross_entropy(
-                shift_logits.view(-1, shift_logits.size(-1)),
-                shift_labels.view(-1),
+                shift_logits.view(-1, shift_logits.size(-1)),  # (B*(T-1), vocab_size)
+                shift_labels.view(-1),                          # (B*(T-1),)
                 ignore_index=-100,
             )
             return loss, logits
@@ -466,6 +476,12 @@ class GPT2(nn.Module):
     @classmethod
     def from_pretrained(cls, checkpoint_path: str, config: Optional[GPT2Config] = None, device=None):
         """Load a trained GPT-2 model from a local checkpoint directory.
+
+        ``@classmethod`` means the first argument is the class (cls), not an instance
+        (self). You call it as GPT2.from_pretrained(path), not on an existing model.
+        The method can then build a new instance (cls(config)), load weights, and
+        return it — which is what we need when loading from disk, since no instance
+        exists yet.
 
         Parameters
         ----------
@@ -508,6 +524,10 @@ class GPT2(nn.Module):
     @classmethod
     def from_huggingface(cls, model_name: str = "openai-community/gpt2", device=None):
         """Load weights from a HuggingFace GPT-2 checkpoint to validate implementation.
+
+        ``@classmethod``: first argument is the class (cls), not an instance. Call as
+        GPT2.from_huggingface(...); the method builds a new model with cls(config),
+        loads HF weights into it, and returns it (no existing instance needed).
 
         HuggingFace GPT-2 uses ``Conv1D`` layers whose weight matrices are stored
         as (in_features, out_features) — the transpose of ``nn.Linear``'s
