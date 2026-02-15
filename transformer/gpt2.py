@@ -90,9 +90,13 @@ class ManualCausalSelfAttention(nn.Module):
         self.use_builtin = use_builtin
         self.dropout = config.dropout
 
-        # Combined QKV projection (matches HF GPT-2 ``c_attn``)
-        # GPT-2 uses Conv1D which is just Linear with transposed weight storage.
-        # We use standard nn.Linear — weight mapping handled at load time.
+        # Combined QKV projection: one linear maps hidden state to [Q, K, V] concatenated
+        # (n_embd → 3*n_embd). We split and reshape in forward(). Same design as HF ``c_attn``.
+        # HuggingFace GPT-2 implements this with "Conv1D" layers: same operation as Linear
+        # (per-position y = xW + b), but they store weight as (in_features, out_features)
+        # instead of nn.Linear's (out_features, in_features). We use nn.Linear here; when
+        # loading HF checkpoints in from_huggingface(), we transpose those weights so
+        # they match our (out, in) convention.
         self.c_attn = nn.Linear(config.n_embd, 3 * config.n_embd, bias=config.bias)
 
         # Output projection
@@ -122,9 +126,13 @@ class ManualCausalSelfAttention(nn.Module):
         v = v.view(B, T, self.n_head, self.head_dim).transpose(1, 2)
 
         if self.use_builtin:
-            # PyTorch 2.0+ fused attention kernel — handles causal mask,
-            # scaling, softmax, and dropout in a single CUDA call.
-            # O(n) memory via FlashAttention-style tiling on supported hardware.
+            # PyTorch 2.0+ scaled_dot_product_attention: a single fused CUDA kernel
+            # performs scaling (1/sqrt(d_k)), causal masking, softmax, dropout, and
+            # the final matmul with V. That avoids materializing the full (T, T)
+            # attention matrix in memory and reduces kernel launch overhead. On
+            # supported GPUs the backend can use FlashAttention-style tiling, so
+            # memory use is O(T) or O(T log T) instead of O(T^2), enabling longer
+            # sequences and faster training.
             attn_out = F.scaled_dot_product_attention(
                 q, k, v,
                 attn_mask=None,
@@ -137,15 +145,25 @@ class ManualCausalSelfAttention(nn.Module):
             # Scaled dot-product attention:
             #   Attention(Q, K, V) = softmax(Q K^T / sqrt(d_k)) V
             #
-            # Scaling by 1/sqrt(d_k) prevents dot products from growing
-            # with head dimension, which would push softmax into regions
-            # with vanishingly small gradients.
+            # (1) Variance: (Q K^T)_{ij} is a sum of d_k terms, so Var(sum) ~ d_k.
+            #     We divide by sqrt(d_k) so the logits have variance O(1) and
+            #     don't grow in scale with head dimension.
+            #
+            # (2) Why it helps training: If we didn't scale, logits would have
+            #     large spread. Then one position would dominate, softmax would
+            #     saturate (one weight ~1, rest ~0), and gradients through
+            #     softmax would be small. Scaling keeps the distribution from
+            #     saturating so gradients flow.
             scale = 1.0 / math.sqrt(self.head_dim)
             attn_weights = torch.matmul(q, k.transpose(-2, -1)) * scale  # (B, n_head, T, T)
 
-            # Causal mask: prevent attending to future tokens.
-            # Each position i can only attend to positions 0..i.
-            # We fill future positions with -inf so softmax gives them 0 weight.
+            # Causal mask: each position i may only attend to positions 0..i.
+            # "Future" here means later positions in the same input tensor (j > i),
+            # not "tokens not yet generated". In one forward pass we have the full
+            # sequence; without the mask, position 0 could attend to 1,2,...,T-1,
+            # so hidden states would depend on later positions and the LM would
+            # not be causal. We fill those positions with -inf so softmax zeros them.
+            # Needed at inference too (same full-sequence forward), not just consistency.
             causal_mask = torch.triu(
                 torch.ones(T, T, device=x.device, dtype=torch.bool), diagonal=1
             )
