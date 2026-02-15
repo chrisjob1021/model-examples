@@ -261,9 +261,18 @@ class GPT2(nn.Module):
     (n_embd → vocab_size) map. One matrix thus serves both lookup and output projection.
 
     Weight tying: The language model head shares weights with the token
-    embedding. This reduces parameters by ~38M (768*50257) and acts as a
-    regularizer — the model must produce representations that are useful
-    for both embedding tokens and predicting the next token.
+    embedding: ``lm_head.weight`` and ``wte.weight`` are the same tensor, so
+    only one (vocab_size × n_embd) matrix is stored. Without tying we would
+    have separate wte and lm_head matrices (2 × 50257 × 768 ≈ 77M parameters);
+    with tying we have one (~38.5M), saving about half the embedding-side
+    parameters.
+
+    As a regularizer, tying forces the same matrix to do two jobs: (1) map
+    token IDs to input vectors, and (2) map hidden states to output logits.
+    The model cannot use a separate output space that drifts from the
+    embedding space; the hidden representations must stay aligned with the
+    token directions defined by wte. That often improves generalization and
+    is standard in GPT-2 and many other language models.
     """
 
     def __init__(self, config: Optional[GPT2Config] = None, *, use_builtin_attn: bool = True):
