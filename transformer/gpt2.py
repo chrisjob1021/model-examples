@@ -346,12 +346,19 @@ class GPT2(nn.Module):
         # Initialize weights
         self.apply(self._init_weights)
 
-        # Apply special scaled initialization to output projections
-        # (residual stream accumulates contributions from each block)
+        # Apply special scaled initialization to output projections (once at init only).
+        # The residual stream is: embed + (attn_1 + mlp_1) + (attn_2 + mlp_2) + ...
+        # So we add 2*n_layer vectors (one attn output and one mlp output per block).
+        #
+        # If each of those had unit-scale variance, the residual variance would grow
+        # with depth. We scale each block's output projections by 1/sqrt(2*n_layer).
+        #
+        # Scaling the weight matrix by that factor scales the layer output variance by
+        # the same factor, so the variance of each addition scales by its
+        # square, 1/(2*n_layer).  Summing these (roughly uncorrelated) 
+        # contributions gives total variance 2*n_layer * (1/(2*n_layer)) = 1, 
+        # so the residual stays O(1).
         for block_idx, block in enumerate(self.h):
-            # Scale down output projection weights by 1/sqrt(2*n_layer)
-            # to prevent the residual stream variance from growing with depth.
-            # Factor of 2 accounts for two residual additions per block (attn + mlp).
             scale = 1.0 / math.sqrt(2 * config.n_layer)
             with torch.no_grad():
                 block.attn.c_proj.weight.mul_(scale)
