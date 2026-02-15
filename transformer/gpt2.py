@@ -655,11 +655,19 @@ class GPT2(nn.Module):
                 logits = logits[:, -1, :] / temperature
 
                 if top_k is not None:
+                    # topk returns (values, indices); we only need values. v has shape (B, k).
                     v, _ = torch.topk(logits, min(top_k, logits.size(-1)))
+                    # v[:, [-1]] is the k-th largest value per batch (smallest of top-k), shape (B, 1).
+                    # Mask out logits below that threshold so softmax only has mass on top-k.
                     logits[logits < v[:, [-1]]] = float("-inf")
 
                 probs = F.softmax(logits, dim=-1)
+                # multinomial(probs, num_samples=1): treats probs as a probability
+                # distribution over the last dim (vocab). For each batch element,
+                # draws one index in [0, vocab_size) with P(index=j) = probs[j].
+                # Higher probability tokens are more likely to be sampled. Returns (B, 1).
                 next_token = torch.multinomial(probs, num_samples=1)
+                # Append the new token to the sequence (dim=1 is the sequence length).
                 input_ids = torch.cat([input_ids, next_token], dim=1)
 
         return input_ids
@@ -681,9 +689,9 @@ class GPT2Trainer(Trainer):
     def __init__(self, *args, error_log_path=None, **kwargs):
         super().__init__(*args, **kwargs)
         self.error_log_path = error_log_path
-        self.gradient_logging_enabled = error_log_path is not None
+        self.error_logging_enabled = error_log_path is not None
 
-        if self.gradient_logging_enabled:
+        if self.error_logging_enabled:
             import os
             os.makedirs(os.path.dirname(error_log_path) if os.path.dirname(error_log_path) else ".", exist_ok=True)
             with open(error_log_path, "w") as f:
@@ -691,9 +699,9 @@ class GPT2Trainer(Trainer):
                 f.write("GPT-2 TRAINING ANOMALY LOG\n")
                 f.write("=" * 80 + "\n\n")
 
-    def _log_anomaly(self, step, message, details=None):
-        """Log anomaly to error log file."""
-        if not self.gradient_logging_enabled:
+    def _log_error(self, step, message, details=None):
+        """Write a message to the error log file."""
+        if not self.error_logging_enabled:
             return
         import datetime
         timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -720,9 +728,9 @@ class GPT2Trainer(Trainer):
         labels = labels.to(model_device)
 
         # Check for input anomalies
-        if hasattr(self, "state") and self.gradient_logging_enabled:
+        if hasattr(self, "state") and self.error_logging_enabled:
             if (input_ids < 0).any() or (input_ids >= model.config.vocab_size).any():
-                self._log_anomaly(
+                self._log_error(
                     self.state.global_step,
                     "Invalid token IDs detected",
                     {"min": input_ids.min().item(), "max": input_ids.max().item()},
@@ -731,9 +739,9 @@ class GPT2Trainer(Trainer):
         loss, logits = model(input_ids=input_ids, labels=labels)
 
         # Check for loss anomalies
-        if hasattr(self, "state") and self.gradient_logging_enabled:
+        if hasattr(self, "state") and self.error_logging_enabled:
             if torch.isnan(loss) or torch.isinf(loss):
-                self._log_anomaly(
+                self._log_error(
                     self.state.global_step,
                     f"{'NaN' if torch.isnan(loss) else 'Inf'} loss detected",
                     {"loss": loss.item() if not torch.isnan(loss) else "NaN"},
