@@ -463,15 +463,39 @@ def main():
 
     if args.validate_weights:
         print("\n--- Weight Validation Mode ---")
-        model = GPT2.from_huggingface("openai-community/gpt2", device=device)
+        from transformers import GPT2LMHeadModel
 
-        # Quick sanity check: generate a few tokens
+        # Load both models with the same weights
+        hf_model = GPT2LMHeadModel.from_pretrained("openai-community/gpt2").to(device)
+        hf_model.eval()
+        model = GPT2.from_huggingface("openai-community/gpt2", device=device)
+        model.eval()
+
+        # Compare logits on a test input
         prompt = "The meaning of life is"
         input_ids = tokenizer.encode(prompt, return_tensors="pt").to(device)
+
+        with torch.no_grad():
+            hf_logits = hf_model(input_ids).logits
+            our_logits = model(input_ids)
+
+        max_diff = (hf_logits - our_logits).abs().max().item()
+        mean_diff = (hf_logits - our_logits).abs().mean().item()
+        print(f"\nLogit comparison (prompt: '{prompt}'):")
+        print(f"  Max absolute difference:  {max_diff:.2e}")
+        print(f"  Mean absolute difference: {mean_diff:.2e}")
+
+        atol = 1e-4
+        if torch.allclose(hf_logits, our_logits, atol=atol):
+            print(f"  PASS: logits match within atol={atol}")
+        else:
+            print(f"  FAIL: logits differ beyond atol={atol}")
+            return
+
+        # Also generate text as a qualitative check
         output_ids = model.generate(input_ids, max_new_tokens=50, temperature=0.8, top_k=40)
         generated_text = tokenizer.decode(output_ids[0], skip_special_tokens=True)
-        print(f"\nPrompt: {prompt}")
-        print(f"Generated: {generated_text}")
+        print(f"\nGenerated: {generated_text}")
         print("\nWeight validation successful!")
         return
 
