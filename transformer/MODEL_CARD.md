@@ -89,12 +89,12 @@ This requires **checkpoint surgery** — converting weights from the old shape t
 
 | Step | Weight Surgery                                        | Expected Loss Spike |
 |------|-------------------------------------------------------|---------------------|
-| 1    | Copy LayerNorm γ → RMSNorm γ, drop all biases        | Minimal             |
+| 1    | Copy LayerNorm γ → RMSNorm γ, init QK-Norm, drop biases | Minimal          |
 | 2    | Reinitialize FFN (shape mismatch: 2 → 3 matrices)    | Moderate            |
 | 3    | Drop position embedding table, no new params          | Moderate            |
 | 4    | Mean-pool groups of 4 KV heads → 1 KV head           | Small               |
 | 5    | No weight changes — only attention mask changes       | None                |
-| 6    | Copy dense FFN → all 32 experts, random init router   | Moderate            |
+| 6    | Dense FFN → shared expert + 32 routed copies, random init router | Moderate |
 
 After each surgery, continue training with a **warmup restart** (re-warmup learning rate
 over ~1% of that step's token budget) to let the model adapt to the new component.
@@ -122,12 +122,12 @@ the corpus. No data is repeated between steps.
 | Step                    | Tokens | Wall Time | Rationale                              |
 |-------------------------|--------|-----------|----------------------------------------|
 | Baseline (GPT-2-7B)    | ~80B   | ~2.5 days | Establish foundation from scratch      |
-| Step 1 (RMSNorm)        | ~5B    | ~4 hours  | Near-zero recovery needed              |
+| Step 1 (RMSNorm+QK-Norm)| ~5B    | ~4 hours  | Near-zero recovery needed              |
 | Step 2 (SwiGLU)         | ~25B   | ~20 hours | FFN reinitialized, needs to relearn    |
 | Step 3 (RoPE)           | ~20B   | ~16 hours | Attention relearns position encoding   |
 | Step 4 (GQA)            | ~10B   | ~8 hours  | Mean-pooled KV, fast recovery          |
 | Step 5 (Sliding window) | ~5B    | ~4 hours  | No weight change, just adaptation      |
-| Step 6 (MoE)            | ~55B   | ~1.8 days | Router specialization + expert divergence |
+| Step 6 (MoE+shared exp) | ~55B   | ~1.8 days | Router specialization + expert divergence |
 | **Total**               |**~200B**| **~7 days**|                                      |
 
 Note: Step 6 (MoE) changes active param count from 7B to ~2-3B, so tokens/second
@@ -176,7 +176,7 @@ After each checkpoint surgery, before committing to a full training run:
 
 | Step | Recovery Steps | Key Diagnostic                                |
 |------|---------------|-----------------------------------------------|
-| 1    | ~100          | Loss nearly unchanged after surgery           |
+| 1    | ~100          | Loss nearly unchanged after surgery (QK-Norm init'd to ones = identity) |
 | 2    | ~5-10K        | Loss spikes then beats pre-surgery (SwiGLU wins) |
 | 3    | ~2-5K         | Test extrapolation beyond training context    |
 | 4    | ~1-2K         | Compare inference KV cache size               |
@@ -190,42 +190,56 @@ Order is from simplest/most independent to most complex/interdependent.
 
 #### Baseline: GPT-2 scaled to 7B
 
-| Parameter       | Value      |
-|-----------------|------------|
-| Layers          | 32         |
-| Hidden size     | 4096       |
-| Attention heads | 32         |
-| Head dimension  | 128        |
-| FFN inner dim   | 16,384 (4x)|
-| Vocab size      | 50,257     |
-| Activation      | GELU       |
-| Normalization   | Pre-LayerNorm |
+| Parameter       | Value            |
+|-----------------|------------------|
+| Layers          | 32               |
+| Hidden size     | 4096             |
+| Attention heads | 32               |
+| Head dimension  | 128              |
+| FFN inner dim   | 16,384 (4x)      |
+| Vocab size      | 50,257           |
+| Activation      | GELU             |
+| Normalization   | Pre-LayerNorm    |
 | Position        | Learned absolute |
-| Bias            | Yes        |
-| **Total params**| **~6.8B**  |
+| Bias            | Yes              |
+| Attention impl  | Flash Attention 2|
+| **Total params**| **~6.8B**        |
+
+**Flash Attention:** Used from the baseline onward — not an architecture change but a
+fused CUDA kernel that computes exact attention in O(n) memory instead of O(n²) by
+tiling the computation and never materializing the full attention matrix. Critical for
+training at 7B scale. Natively supports causal masking and sliding window masking
+(Step 5), so it carries through all subsequent steps with no modification.
 
 ---
 
-#### Step 1: RMSNorm + Drop Biases
+#### Step 1: RMSNorm + QK-Norm + Drop Biases
 
-**What changes:** LayerNorm → RMSNorm, remove all bias terms.
+**What changes:** LayerNorm → RMSNorm, add QK-Norm, remove all bias terms.
 
-**Why first:** Pure drop-in swap with zero interaction with other components.
+**Why first:** Pure drop-in swaps with zero interaction with other components.
 RMSNorm skips the mean subtraction in LayerNorm — only normalizes by variance.
 Fewer parameters, faster computation, same or better training stability at scale.
 
 **Why remove biases:** Modern architectures (Llama, GPT-OSS, PaLM) all dropped them.
 At scale, biases add parameters without measurable quality gain.
 
-| Changed         | Before          | After           |
-|-----------------|-----------------|-----------------|
-| Normalization   | Pre-LayerNorm   | Pre-RMSNorm     |
-| Bias (attn/FFN) | Yes             | No              |
-| Norm params     | 2 * 2 * d       | 2 * d per layer |
+**QK-Norm:** Apply RMSNorm to Q and K vectors before the dot product in attention.
+Prevents attention logit explosion at scale — without it, dot products grow with
+`sqrt(d_head)` and can destabilize training. Used in Gemma 2, Cohere Command R.
+Adds one `RMSNorm(d_head)` each for Q and K per layer — negligible param increase.
+
+| Changed         | Before          | After                        |
+|-----------------|-----------------|------------------------------|
+| Normalization   | Pre-LayerNorm   | Pre-RMSNorm                  |
+| QK-Norm         | None            | RMSNorm on Q and K per head  |
+| Bias (attn/FFN) | Yes             | No                           |
+| Norm params     | 2 * 2 * d       | 2 * d + 2 * d_head per layer |
 
 **Checkpoint surgery:**
 - Copy LayerNorm `weight` (γ) → RMSNorm `weight` (γ). Both are shape `[d_model]`.
 - LayerNorm `bias` (β) is dropped — RMSNorm has no bias.
+- QK-Norm weights are **newly initialized** (ones) — shape `[d_head]` each, tiny.
 - All attention and FFN bias vectors are dropped.
 - All other weights (attention projections, FFN matrices, embeddings) transfer 1:1.
 
@@ -371,49 +385,61 @@ The alternating pattern gives both local precision and global coherence.
 
 ---
 
-#### Step 6: Mixture of Experts (MoE)
+#### Step 6: Mixture of Experts (MoE) + Shared Expert
 
-**What changes:** Replace each dense SwiGLU FFN with a routed set of expert FFNs.
-Only top-k experts are activated per token.
+**What changes:** Replace each dense SwiGLU FFN with a routed set of expert FFNs
+plus one shared expert. Only top-k routed experts are activated per token; the shared
+expert is always active.
 
 **Why last:** Most complex structural change. Affects parameter accounting, training
 dynamics, parallelism strategy, and inference. Everything else should be stable first.
 
-Each token goes through a learned router that selects the top-k experts.
-The rest of the experts are skipped, making compute proportional to active params.
+Each token goes through a learned router that selects the top-k routed experts.
+The rest are skipped, making compute proportional to active params. The **shared
+expert** (DeepSeek-V2/V3 pattern) runs on every token regardless of routing,
+providing a stable backbone while routed experts specialize. This reduces expert
+collapse — if a routed expert dies, the shared expert still carries the load.
 
-| Changed               | Before (dense)    | After (MoE)                   |
-|-----------------------|-------------------|-------------------------------|
-| FFN per layer         | 1 dense           | 32 experts, top-4 active      |
-| FFN intermediate      | 11,008            | 2,880 per expert (GPT-OSS)    |
-| Router                | None              | Linear(d_model, num_experts)  |
-| Aux loss              | None              | Load balancing (coeff=0.01)   |
-| Active params         | 7B                | ~2-3B active / 7B+ total      |
-| Training parallelism  | FSDP              | FSDP + expert parallelism     |
+| Changed               | Before (dense)    | After (MoE + shared expert)             |
+|-----------------------|-------------------|-----------------------------------------|
+| FFN per layer         | 1 dense           | 1 shared + 32 routed, top-4 routed active |
+| FFN intermediate      | 11,008            | 2,880 per expert (GPT-OSS)              |
+| Router                | None              | Linear(d_model, 32) for routed experts  |
+| Shared expert         | N/A               | Always active, same dim as routed       |
+| Aux loss              | None              | Load balancing (coeff=0.01)             |
+| Active per token      | 7B                | shared + top-4 routed = 5 experts active|
+| Training parallelism  | FSDP              | FSDP + expert parallelism               |
 
 **Note:** This step changes the 7B parameter accounting. To keep 7B total, each
 expert is smaller than the dense FFN it replaces. To keep 7B *active*, the total
 model grows to ~20B+. Choose based on your comparison goal.
 
 **Checkpoint surgery:**
-- Each of the 32 expert FFNs is initialized as a **copy of the dense SwiGLU FFN**.
+- The **shared expert** is initialized as a **direct copy of the dense SwiGLU FFN**.
+  This is the strongest init — the shared expert starts exactly where the dense model
+  left off, so baseline quality is preserved from step 0.
+- Each of the 32 **routed expert** FFNs is initialized as a copy of the same dense FFN.
   If expert intermediate dim differs from dense (2,880 vs 11,008), slice the weights.
 - Router `Linear(4096, 32)` is **randomly initialized** — no prior knowledge of
   which tokens should go where.
 - All attention weights, norms, and embeddings transfer 1:1.
-- All experts start identical. Specialization emerges during training as the router
-  learns to route different token types to different experts.
+- Initially, all experts (shared + routed) are identical. The shared expert provides
+  stability while routed experts diverge and specialize during training.
 
 **Validation:**
-1. Forward pass: loss should be close to pre-surgery (all experts are copies of the
-   working dense FFN, so any top-4 selection produces the same output initially).
-2. Recovery run (~5-10K steps): router learns non-trivial routing, experts diverge.
-3. Monitor **expert utilization**: track how many tokens each expert receives per batch.
-   If any expert gets <1% of tokens, it's dying — increase aux loss coefficient.
+1. Forward pass: loss should be close to pre-surgery (shared expert alone preserves
+   dense model behavior; routed experts are identical copies on top).
+2. Recovery run (~5-10K steps): router learns non-trivial routing, routed experts diverge.
+3. Monitor **expert utilization**: track how many tokens each routed expert receives per
+   batch. If any routed expert gets <1% of tokens, it's dying — increase aux loss.
+   The shared expert always gets 100% of tokens by design.
 4. Monitor **router entropy**: should start high (random) and settle to moderate
    (specialized but not collapsed).
-5. **Expected recovery: ~5-10K steps.** Initial loss is fine (expert clones), but
-   the model needs time to develop meaningful specialization.
+5. Monitor **shared vs routed contribution**: over time, routed experts should contribute
+   increasingly to the output. If the shared expert dominates indefinitely, routed
+   experts aren't specializing — consider reducing shared expert capacity.
+6. **Expected recovery: ~5-10K steps.** Initial loss is fine (shared expert carries),
+   but the model needs time to develop meaningful routed specialization.
 
 ---
 
