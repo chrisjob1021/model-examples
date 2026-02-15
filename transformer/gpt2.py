@@ -231,10 +231,20 @@ class GPT2Block(nn.Module):
         x = LayerNorm(x + Attention(x))
         x = LayerNorm(x + MLP(x))
 
-    Pre-LayerNorm stabilizes training by normalizing inputs to each sublayer
-    before the transformation, keeping the residual stream on a more uniform
-    scale. This is critical for training deep transformers without careful
-    learning rate warmup.
+    LayerNorm: For each position, normalize across the feature dimension (n_embd).
+    Compute mean mu and std sigma over those features, then y = (x - mu) / (sigma + eps),
+    then apply learnable scale and shift: out = gamma * y + beta. Subtracting mu
+    only centers (zero mean); dividing by sigma makes the spread consistent (unit
+    variance). 
+    
+    Without the divide, different positions/layers could have very
+    different magnitudes and downstream layers would see inconsistent input scale.
+    So each token's hidden vector has zero mean and unit variance (before
+    scale/shift), and the model can rescale per dimension with gamma/beta.
+    
+    Pre-LayerNorm applies this to the input of each sublayer, so Attention and MLP see 
+    inputs on a consistent scale. That keeps the residual stream from drifting in 
+    magnitude and stabilizes deep training without careful learning-rate warmup.
     """
 
     def __init__(self, config: GPT2Config, *, use_builtin_attn: bool = True):
