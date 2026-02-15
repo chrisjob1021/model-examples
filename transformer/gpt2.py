@@ -242,11 +242,23 @@ class GPT2(nn.Module):
     """GPT-2 decoder-only transformer language model.
 
     Architecture (124M):
-        wte:  Token embedding        (50257, 768)
-        wpe:  Position embedding      (1024, 768)
+        wte:  Token embedding        (vocab_size, n_embd) = (50257, 768)
+        wpe:  Position embedding     (n_positions, n_embd) = (1024, 768)
         h:    12x GPT2Block
-        ln_f: Final LayerNorm         (768,)
-        lm_head: Linear(768, 50257)   — weight-tied with wte
+        ln_f: Final LayerNorm         (n_embd,) = (768,)
+        lm_head: Linear(n_embd, vocab_size) = (768, 50257)  — weight-tied with wte
+
+    wte (word token embedding): Lookup table of shape (vocab_size, n_embd):
+    first dimension = vocabulary size (50257), second = embedding dimension (768).
+    Token IDs index the first dimension to produce hidden vectors of size n_embd.
+    The same matrix is reused as lm_head (output projection) via weight tying.
+
+    Why lm_head uses the transpose: The shared matrix has shape (vocab_size, n_embd).
+    For wte we index the first dimension (token_id → embedding vector). For the output
+    we need a map (n_embd → vocab_size) to get logits. nn.Linear(n_embd, vocab_size)
+    stores its weight as (out, in) = (vocab_size, n_embd) and computes output = input @ weight.T,
+    so the same (vocab_size, n_embd) tensor is applied as the transpose, giving the
+    (n_embd → vocab_size) map. One matrix thus serves both lookup and output projection.
 
     Weight tying: The language model head shares weights with the token
     embedding. This reduces parameters by ~38M (768*50257) and acts as a
