@@ -191,6 +191,19 @@ class GPT2MLP(nn.Module):
     GPT-2 FFN:  y = dropout(W_down(GELU(W_up(x))))
     Two linear layers with GELU activation in between.
     Inner dimension is 4x the embedding dimension (3072 for GPT-2).
+
+    Expand then contract: the up projection (768 → 3072) gives a larger
+    intermediate space so the model can compute many non-linear features in
+    parallel; the down projection (3072 → 768) mixes them back into the residual
+    stream dimension so the block output can be added to the residual (same
+    shape). 
+    
+    Why want many in parallel? The FFN is where most of the per-position
+    "reasoning" happens (attention mixes across positions). A wider hidden layer
+    lets the model learn many different feature detectors or local computations
+    at once (e.g. different syntactic or semantic patterns), which the down
+    projection then combines. Narrower would cap how many such patterns one
+    block can express before we compress back to the residual size.
     """
 
     def __init__(self, config: GPT2Config):
