@@ -224,7 +224,10 @@ class GPT2MLP(nn.Module):
         # normal exceeds it — large positive values pass through unchanged,
         # large negative values are zeroed, and values near zero get a smooth
         # transition between the two regimes.
-        x = F.gelu(self.c_fc(x))
+        # OpenAI's GPT-2 was trained with the tanh-approximate GELU
+        # (``gelu_new`` in HuggingFace). Using the exact GELU causes
+        # small numerical differences that accumulate across 12 layers.
+        x = F.gelu(self.c_fc(x), approximate="tanh")
         x = self.c_proj(x)
         return self.dropout(x)
 
@@ -608,10 +611,11 @@ class GPT2(nn.Module):
             new_sd[f"{prefix_ours}.mlp.c_proj.weight"] = hf_sd[f"{prefix_hf}.mlp.c_proj.weight"].t()
             new_sd[f"{prefix_ours}.mlp.c_proj.bias"] = hf_sd[f"{prefix_hf}.mlp.c_proj.bias"]
 
-        # LM head — tied with wte in both HF and our implementation
-        # HF stores it as ``lm_head.weight`` which equals ``transformer.wte.weight``
-        # We tie them in __init__, so we don't load lm_head separately.
-        # The tie means lm_head.weight IS wte.weight (same tensor).
+        # LM head — tied with wte in both HF and our implementation.
+        # HF stores it as ``lm_head.weight`` which equals ``transformer.wte.weight``.
+        # We tie them in __init__ (same tensor), but PyTorch's state_dict() still
+        # lists ``lm_head.weight`` as a key, so strict loading requires it.
+        new_sd["lm_head.weight"] = new_sd["wte.weight"]
 
         model.load_state_dict(new_sd, strict=True)
         model = model.to(device)

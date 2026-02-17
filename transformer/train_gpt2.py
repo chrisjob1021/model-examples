@@ -431,7 +431,7 @@ def main():
 
     if device.type == "cuda":
         print(f"GPU: {torch.cuda.get_device_name()}")
-        print(f"GPU Memory: {torch.cuda.get_device_properties(0).total_mem / 1e9:.1f} GB")
+        print(f"GPU Memory: {torch.cuda.get_device_properties(0).total_memory / 1e9:.1f} GB")
         torch.backends.cuda.matmul.allow_tf32 = True
         torch.backends.cudnn.allow_tf32 = True
 
@@ -465,15 +465,29 @@ def main():
         print("\n--- Weight Validation Mode ---")
         from transformers import GPT2LMHeadModel
 
-        # Load both models with the same weights
-        hf_model = GPT2LMHeadModel.from_pretrained("openai-community/gpt2").to(device)
+        # Compare on CPU for an exact float32 correctness check.
+        #
+        # Why not GPU? F.scaled_dot_product_attention dispatches to fused CUDA
+        # kernels (FlashAttention / memory-efficient attention) that reorder
+        # floating-point accumulations for speed — e.g. tiling the (T, T) attention
+        # matrix into blocks and reducing partial sums in a different order than the
+        # naïve loop. Because float addition is not associative ((a+b)+c != a+(b+c)
+        # in finite precision), the fused result differs slightly from HF's
+        # non-fused path, even with identical weights and inputs. These differences
+        # (~1e-3 after 12 layers) are hardware-specific rounding artifacts, not
+        # implementation bugs. On CPU both models use the same scalar reduction
+        # order, so any remaining difference is a true architecture mismatch.
+        compare_device = torch.device("cpu")
+        print(f"Comparing logits on: {compare_device} (deterministic float32)")
+
+        hf_model = GPT2LMHeadModel.from_pretrained("openai-community/gpt2").to(compare_device)
         hf_model.eval()
-        model = GPT2.from_huggingface("openai-community/gpt2", device=device)
+        model = GPT2.from_huggingface("openai-community/gpt2", device=compare_device)
         model.eval()
 
         # Compare logits on a test input
         prompt = "The meaning of life is"
-        input_ids = tokenizer.encode(prompt, return_tensors="pt").to(device)
+        input_ids = tokenizer.encode(prompt, return_tensors="pt").to(compare_device)
 
         with torch.no_grad():
             hf_logits = hf_model(input_ids).logits
@@ -492,7 +506,9 @@ def main():
             print(f"  FAIL: logits differ beyond atol={atol}")
             return
 
-        # Also generate text as a qualitative check
+        # Also generate text as a qualitative check (on the original device for speed)
+        model = model.to(device)
+        input_ids = input_ids.to(device)
         output_ids = model.generate(input_ids, max_new_tokens=50, temperature=0.8, top_k=40)
         generated_text = tokenizer.decode(output_ids[0], skip_special_tokens=True)
         print(f"\nGenerated: {generated_text}")
