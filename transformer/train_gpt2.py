@@ -449,8 +449,8 @@ def main():
     # ---------------------------------------------------------------
     # Tokenizer — use GPT-2's BPE tokenizer
     # ---------------------------------------------------------------
-    # Disable the tokenizer's built-in max length warning — we handle
-    # chunking to max_length ourselves in tokenize_pretrain().
+    # Disable the tokenizer's built-in max length warning through a large model_max_length value
+    # This is a hack to avoid the warning, and we handle chunking to max_length ourselves in tokenize_pretrain().
     tokenizer = AutoTokenizer.from_pretrained("openai-community/gpt2", model_max_length=int(1e30))
     # GPT-2 tokenizer has no padding token; set it to EOS
     if tokenizer.pad_token is None:
