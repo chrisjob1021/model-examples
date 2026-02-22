@@ -7,3 +7,4 @@ results/
 logs/
 selfdriving/waymo/
 *.DS_Store
+*.log

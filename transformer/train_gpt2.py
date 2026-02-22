@@ -46,7 +46,7 @@ def tokenize_pretrain(examples, tokenizer, max_length):
         all_ids.extend(ids)
         all_ids.append(tokenizer.eos_token_id)
 
-    # Split into fixed-length chunks (drop remainder < max_length)
+    # Split into fixed-length chunks (drop remainder > max_length)
     chunks = []
     for i in range(0, len(all_ids) - max_length, max_length):
         chunks.append(all_ids[i : i + max_length])
@@ -449,7 +449,9 @@ def main():
     # ---------------------------------------------------------------
     # Tokenizer — use GPT-2's BPE tokenizer
     # ---------------------------------------------------------------
-    tokenizer = AutoTokenizer.from_pretrained("openai-community/gpt2")
+    # Disable the tokenizer's built-in max length warning — we handle
+    # chunking to max_length ourselves in tokenize_pretrain().
+    tokenizer = AutoTokenizer.from_pretrained("openai-community/gpt2", model_max_length=int(1e30))
     # GPT-2 tokenizer has no padding token; set it to EOS
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
@@ -549,7 +551,7 @@ def main():
     if args.stage in ("pretrain", "all"):
         # Dataset: allenai/dolma — 3T+ tokens, sample ~10-20B for 124M model
         # For feasible training, start with a smaller subset (controlled by --max-tokens)
-        pretrain_dataset_name = "allenai/dolma"
+        pretrain_dataset_name = "allenai/dolma3_pool"
         default_pretrain_tokens = 1_000_000_000  # 1B tokens as a reasonable starting point
 
         max_tokens = args.max_tokens or default_pretrain_tokens
