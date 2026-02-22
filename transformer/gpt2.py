@@ -66,6 +66,11 @@ class GPT2Config:
         assert n_embd % n_head == 0, f"n_embd ({n_embd}) must be divisible by n_head ({n_head})"
         self.head_dim = n_embd // n_head  # 64 for GPT-2
 
+    def to_json_string(self):
+        """Serialize config to JSON (expected by HF TensorBoard callback)."""
+        import json
+        return json.dumps(self.__dict__, indent=2)
+
 
 # ---------------------------------------------------------------------------
 # Manual multi-head causal self-attention (educational)

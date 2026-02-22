@@ -14,6 +14,7 @@ import sys
 import argparse
 
 import torch
+from torch.utils.data import IterableDataset
 from datasets import load_dataset
 from transformers import (
     TrainingArguments,
@@ -41,8 +42,8 @@ def tokenize_pretrain(examples, tokenizer, max_length):
     """
     # Concatenate all texts with EOS separator
     all_ids = []
-    for text in examples["text"]:
-        ids = tokenizer.encode(text, add_special_tokens=False)
+    encoded = tokenizer(examples["text"], add_special_tokens=False)["input_ids"]
+    for ids in encoded:
         all_ids.extend(ids)
         all_ids.append(tokenizer.eos_token_id)
 
@@ -52,6 +53,70 @@ def tokenize_pretrain(examples, tokenizer, max_length):
         chunks.append(all_ids[i : i + max_length])
 
     return {"input_ids": chunks, "labels": [c[:] for c in chunks]}
+
+
+class StreamingPretrainDataset(IterableDataset):
+    """Tokenizes a streaming HF dataset on-the-fly into fixed-length chunks.
+
+    Yields ``{"input_ids": ..., "labels": ...}`` dicts of length
+    ``max_length`` so training can start immediately without materializing
+    the whole dataset.
+    """
+
+    def __init__(self, dataset_name, tokenizer, max_length, max_tokens, split="train"):
+        self.dataset_name = dataset_name
+        self.tokenizer = tokenizer
+        self.max_length = max_length
+        self.max_tokens = max_tokens
+        self.split = split
+
+    def __iter__(self):
+        raw = load_dataset(
+            self.dataset_name, split=self.split, streaming=True, trust_remote_code=True,
+        )
+        buffer = []
+        tokens_yielded = 0
+        batch_texts = []
+        batch_size = 1000
+
+        for example in raw:
+            text = example.get("text", "")
+            if not text.strip():
+                continue
+            batch_texts.append(text)
+
+            if len(batch_texts) >= batch_size:
+                encoded = self.tokenizer(batch_texts, add_special_tokens=False)["input_ids"]
+                for ids in encoded:
+                    buffer.extend(ids)
+                    buffer.append(self.tokenizer.eos_token_id)
+                batch_texts = []
+
+                while len(buffer) >= self.max_length:
+                    chunk = buffer[: self.max_length]
+                    buffer = buffer[self.max_length :]
+                    tokens_yielded += self.max_length
+                    yield {"input_ids": chunk, "labels": chunk[:]}
+                    if self.max_tokens and tokens_yielded >= self.max_tokens:
+                        return
+
+        # Flush: the main loop only tokenizes every 1000 texts, so up to 999
+        # documents may remain in batch_texts, plus the buffer may hold enough
+        # leftover tokens for more complete chunks. Drain both so we don't
+        # silently drop the tail end of the data. Any remaining tokens shorter
+        # than max_length are discarded (same as tokenize_pretrain).
+        if batch_texts:
+            encoded = self.tokenizer(batch_texts, add_special_tokens=False)["input_ids"]
+            for ids in encoded:
+                buffer.extend(ids)
+                buffer.append(self.tokenizer.eos_token_id)
+            while len(buffer) >= self.max_length:
+                chunk = buffer[: self.max_length]
+                buffer = buffer[self.max_length :]
+                tokens_yielded += self.max_length
+                yield {"input_ids": chunk, "labels": chunk[:]}
+                if self.max_tokens and tokens_yielded >= self.max_tokens:
+                    return
 
 
 def tokenize_sft(examples, tokenizer, max_length):
@@ -133,46 +198,12 @@ def load_and_prepare_pretrain_dataset(
     print(f"Loading dataset: {dataset_name} (split={split})")
 
     if streaming:
-        raw = load_dataset(dataset_name, split=split, streaming=True, trust_remote_code=True)
-
-        # For streaming datasets, collect batches and tokenize
-        all_input_ids = []
-        all_labels = []
-        token_count = 0
-        batch_texts = []
-        batch_size = 1000
-
-        for example in raw:
-            text = example.get("text", "")
-            if not text.strip():
-                continue
-            batch_texts.append(text)
-
-            if len(batch_texts) >= batch_size:
-                result = tokenize_pretrain({"text": batch_texts}, tokenizer, max_length)
-                all_input_ids.extend(result["input_ids"])
-                all_labels.extend(result["labels"])
-                token_count = len(all_input_ids) * max_length
-                batch_texts = []
-
-                if max_tokens and token_count >= max_tokens:
-                    print(f"Reached token budget: ~{token_count:,} tokens ({len(all_input_ids):,} sequences)")
-                    break
-
-                if len(all_input_ids) % 10000 == 0:
-                    print(f"  Processed {len(all_input_ids):,} sequences (~{token_count:,} tokens)")
-
-        # Process remaining batch
-        if batch_texts:
-            result = tokenize_pretrain({"text": batch_texts}, tokenizer, max_length)
-            all_input_ids.extend(result["input_ids"])
-            all_labels.extend(result["labels"])
-
-        from datasets import Dataset as HFDataset
-        dataset = HFDataset.from_dict({
-            "input_ids": all_input_ids,
-            "labels": all_labels,
-        })
+        dataset = StreamingPretrainDataset(
+            dataset_name, tokenizer, max_length, max_tokens, split=split,
+        )
+        total_tokens = max_tokens or 0
+        print(f"Streaming dataset ready (up to ~{total_tokens:,} tokens)")
+        return dataset
     else:
         raw = load_dataset(dataset_name, split=split, trust_remote_code=True)
 
@@ -329,9 +360,10 @@ def run_stage(
         adam_epsilon=1e-8,
         max_grad_norm=1.0,
         lr_scheduler_type=lr_scheduler_type,
-        eval_strategy="steps",
+        eval_strategy="steps" if eval_dataset is not None else "no",
         save_strategy="steps",
         logging_strategy="steps",
+        save_safetensors=False,  # torch.compile + weight tying causes shared memory error
         save_total_limit=3,
         load_best_model_at_end=False,
         prediction_loss_only=True,
@@ -563,9 +595,15 @@ def main():
             streaming=args.streaming,
         )
 
-        # Use a small eval split (first 1000 sequences)
-        eval_size = min(1000, len(train_dataset))
-        eval_dataset = train_dataset.select(range(eval_size))
+        is_streaming = isinstance(train_dataset, IterableDataset)
+        if is_streaming:
+            eval_dataset = None
+            # max_steps = total_tokens / (batch_size * grad_accum * max_length)
+            pretrain_max_steps = int(max_tokens / (args.batch_size * args.grad_accum * max_length))
+        else:
+            eval_size = min(1000, len(train_dataset))
+            eval_dataset = train_dataset.select(range(eval_size))
+            pretrain_max_steps = -1
 
         # GPT-2 training hyperparameters (from Chinchilla/GPT-3 conventions)
         #
@@ -587,7 +625,8 @@ def main():
             eval_dataset=eval_dataset,
             output_dir=os.path.join(base_output_dir, "pretrain"),
             tokenizer=tokenizer,
-            num_epochs=1,  # Single pass through data for pretraining
+            num_epochs=1,
+            max_steps=pretrain_max_steps,
             learning_rate=6e-4,
             warmup_ratio=0.01,
             batch_size=args.batch_size,
@@ -616,8 +655,14 @@ def main():
             streaming=args.streaming,
         )
 
-        eval_size = min(1000, len(train_dataset))
-        eval_dataset = train_dataset.select(range(eval_size))
+        is_streaming = isinstance(train_dataset, IterableDataset)
+        if is_streaming:
+            eval_dataset = None
+            midtrain_max_steps = int(midtrain_max_tokens / (args.batch_size * args.grad_accum * max_length))
+        else:
+            eval_size = min(1000, len(train_dataset))
+            eval_dataset = train_dataset.select(range(eval_size))
+            midtrain_max_steps = -1
 
         # Mid-training uses decaying LR toward 0 (cosine to minimum)
         # Lower LR than pretraining since model is already trained
@@ -639,6 +684,7 @@ def main():
             output_dir=os.path.join(base_output_dir, "midtrain"),
             tokenizer=tokenizer,
             num_epochs=1,
+            max_steps=midtrain_max_steps,
             learning_rate=1e-4,  # Lower LR for annealing
             warmup_ratio=0.005,  # Shorter warmup
             batch_size=args.batch_size,
