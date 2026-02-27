@@ -32,7 +32,7 @@ General web-scale language modeling.
 | Setting       | Value                                                                            |
 |---------------|----------------------------------------------------------------------------------|
 | Dataset       | [allenai/dolma](https://hf.co/datasets/allenai/dolma) (3T+ tokens, ODC-BY)      |
-| Subset        | Sample ~10-20B tokens (feasible for 124M on consumer GPU)                        |
+| Subset        | ~40B tokens (~320 tokens/param, ~6 days on 1x L40S)                             |
 | Objective     | Autoregressive next-token prediction                                             |
 | Context       | 1024 tokens                                                                      |
 
@@ -43,6 +43,7 @@ High-quality data mix to sharpen capabilities. Learning rate decays toward zero.
 |---------------|--------------------------------------------------------------------------------------------------------------------|
 | Dataset       | [allenai/dolma3_dolmino_mix-10B-1025](https://hf.co/datasets/allenai/dolma3_dolmino_mix-10B-1025) (ODC-BY)         |
 | Content       | Curated subset: math, code, science, high-quality web (same mix used for OLMo 3 stage 2 micro-anneals)            |
+| Subset        | ~5B tokens (~12% of pretrain budget)                                                                               |
 | Schedule      | Cosine decay to 0, short relative to pretraining                                                                   |
 
 #### Stage 3: Post-training (SFT)
@@ -53,6 +54,7 @@ Instruction following and chat capability.
 | Dataset       | [allenai/tulu-3-sft-mixture](https://hf.co/datasets/allenai/tulu-3-sft-mixture) (ODC-BY)            |
 | Content       | FLAN, OpenAssistant, math (MetaMathQA, personas), code, instruction following, safety (WildGuardMix) |
 | Format        | Multi-turn chat with system/user/assistant roles                                                     |
+| Budget        | ~1.5B tokens (326K examples × ~2300 avg tokens × 2 epochs)                                          |
 
 ---
 
@@ -527,9 +529,9 @@ Trainable on a single GPU (L40S, A100, or even consumer 3090/4090).
 
 | Stage         | Tokens  | Time estimate (1x L40S) |
 |---------------|---------|-------------------------|
-| Pretraining   | 10-20B  | 1-3 days                |
-| Mid-training  | 1-2B    | ~4 hours                |
-| Post-training | ~100M   | ~30 min                 |
+| Pretraining   | ~40B    | ~6 days                 |
+| Mid-training  | ~5B     | ~18 hours               |
+| Post-training | ~1.5B   | ~6 hours                |
 
 ### Phase 2: Architecture Steps (7B, 8x H100)
 
