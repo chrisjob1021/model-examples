@@ -56,9 +56,43 @@ Instruction following and chat capability.
 | Format        | Multi-turn chat with system/user/assistant roles                                                     |
 | Budget        | ~1.5B tokens (326K examples × ~2300 avg tokens × 2 epochs)                                          |
 
+### Phase 1 Evaluation
+
+Run after each training stage to track progress. The evaluation script (`evaluate_model.py`)
+handles all of this.
+
+#### Perplexity (WikiText-2 test set)
+
+Primary quantitative metric. Measures how well the model predicts held-out text.
+
+| Checkpoint         | Target perplexity | Notes                                    |
+|--------------------|-------------------|------------------------------------------|
+| Pretrain (40B tok) | ~29-35            | Match or approach HF GPT-2 124M (~29.4)  |
+| Mid-train          | ~25-30            | High-quality data should improve          |
+| SFT                | ~30-40            | May increase — SFT optimizes for chat, not raw perplexity |
+
+Reference baselines (WikiText-2 test, published):
+
+| Model              | Perplexity |
+|--------------------|------------|
+| GPT-2 124M (HF)   | ~29.4      |
+| GPT-2 355M (HF)   | ~21.1      |
+| GPT-2 774M (HF)   | ~17.5      |
+
+#### Text Generation (qualitative)
+
+Run with `--generate` flag. Spot-check coherence, repetition, and instruction following
+(post-SFT). Not scored — just a sanity check that the model produces reasonable text.
+
 ---
 
 ## Phase 2: Architecture Progression (7B scale, 8x H100)
+
+Phase 2 starts fresh — the 124M checkpoint does not carry over. Weight shapes are
+incompatible (768 hidden → 4096, 12 layers → 32), so there is no meaningful weight
+mapping. Phase 1 is a self-contained exercise: implement GPT-2, validate it, train it,
+run the full 3-stage pipeline. Phase 2 trains a 7B GPT-2 baseline from scratch, then
+incrementally morphs it toward the GPT-OSS architecture via checkpoint surgery.
 
 Validate GPT-OSS-20B architecture by loading `openai/gpt-oss-20b` weights, then train
 each architectural change from GPT-2 baseline at 7B scale.
@@ -207,11 +241,19 @@ Order is from simplest/most independent to most complex/interdependent.
 | Attention impl  | Flash Attention 2|
 | **Total params**| **~6.8B**        |
 
-**Flash Attention:** Used from the baseline onward — not an architecture change but a
-fused CUDA kernel that computes exact attention in O(n) memory instead of O(n²) by
-tiling the computation and never materializing the full attention matrix. Critical for
-training at 7B scale. Natively supports causal masking and sliding window masking
-(Step 5), so it carries through all subsequent steps with no modification.
+**Infrastructure for 7B training:**
+
+| Requirement              | Detail                                                                     |
+|--------------------------|----------------------------------------------------------------------------|
+| **FSDP**                 | Fully Sharded Data Parallel across 8 GPUs. Shards model weights, gradients, and optimizer states — 7B in BF16 is ~14GB for weights alone, plus ~42GB optimizer states (Adam) |
+| **Flash Attention 2**    | Fused CUDA kernel: exact attention in O(n) memory instead of O(n²) by tiling and never materializing the full attention matrix. ~2-3x faster than standard SDPA. Natively supports causal and sliding window masks (Step 5) |
+| **Gradient checkpointing** | Recompute activations during backward pass instead of storing them. Trades ~30% compute for ~60% activation memory savings — necessary at 7B |
+| **BF16 mixed precision** | BFloat16 for forward/backward, FP32 master weights in optimizer. Standard at this scale |
+
+The model code (`GPT2Block`, `GPT2MLP`, `ManualCausalSelfAttention`) is unchanged from
+Phase 1 — `GPT2Config` parameterizes everything, so scaling to 7B is just bigger config
+values. The infrastructure changes (FSDP, Flash Attention, gradient checkpointing) are
+training harness concerns, not architecture changes.
 
 ---
 
