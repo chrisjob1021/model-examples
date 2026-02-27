@@ -169,6 +169,42 @@ def tokenize_sft(examples, tokenizer, max_length):
     return {"input_ids": all_input_ids, "labels": all_labels}
 
 
+def build_streaming_eval_dataset(dataset_name, tokenizer, max_length, num_sequences=1000, split="train"):
+    """Materialize a small eval set by streaming from the end of a dataset split."""
+    from datasets import Dataset as HFDataset
+
+    print(f"Building eval set ({num_sequences} sequences) from {dataset_name}...")
+    raw = load_dataset(dataset_name, split=split, streaming=True, trust_remote_code=True)
+    all_input_ids = []
+    all_labels = []
+    batch_texts = []
+
+    for example in raw:
+        text = example.get("text", "")
+        if not text.strip():
+            continue
+        batch_texts.append(text)
+
+        if len(batch_texts) >= 1000:
+            result = tokenize_pretrain({"text": batch_texts}, tokenizer, max_length)
+            all_input_ids.extend(result["input_ids"])
+            all_labels.extend(result["labels"])
+            batch_texts = []
+            if len(all_input_ids) >= num_sequences:
+                break
+
+    if batch_texts:
+        result = tokenize_pretrain({"text": batch_texts}, tokenizer, max_length)
+        all_input_ids.extend(result["input_ids"])
+        all_labels.extend(result["labels"])
+
+    all_input_ids = all_input_ids[:num_sequences]
+    all_labels = all_labels[:num_sequences]
+    dataset = HFDataset.from_dict({"input_ids": all_input_ids, "labels": all_labels})
+    print(f"Eval set ready: {len(dataset)} sequences")
+    return dataset
+
+
 def load_and_prepare_pretrain_dataset(
     dataset_name, tokenizer, max_length, max_tokens=None, split="train", streaming=False
 ):
@@ -584,7 +620,7 @@ def main():
         # Dataset: allenai/dolma — 3T+ tokens, sample ~10-20B for 124M model
         # For feasible training, start with a smaller subset (controlled by --max-tokens)
         pretrain_dataset_name = "allenai/dolma3_pool"
-        default_pretrain_tokens = 1_000_000_000  # 1B tokens as a reasonable starting point
+        default_pretrain_tokens = 10_000_000_000  # 10B tokens (~80 tokens/param, ~24h on 1x L40S)
 
         max_tokens = args.max_tokens or default_pretrain_tokens
 
@@ -597,7 +633,9 @@ def main():
 
         is_streaming = isinstance(train_dataset, IterableDataset)
         if is_streaming:
-            eval_dataset = None
+            eval_dataset = build_streaming_eval_dataset(
+                pretrain_dataset_name, tokenizer, max_length,
+            )
             # max_steps = total_tokens / (batch_size * grad_accum * max_length)
             pretrain_max_steps = int(max_tokens / (args.batch_size * args.grad_accum * max_length))
         else:
@@ -657,7 +695,9 @@ def main():
 
         is_streaming = isinstance(train_dataset, IterableDataset)
         if is_streaming:
-            eval_dataset = None
+            eval_dataset = build_streaming_eval_dataset(
+                midtrain_dataset_name, tokenizer, max_length,
+            )
             midtrain_max_steps = int(midtrain_max_tokens / (args.batch_size * args.grad_accum * max_length))
         else:
             eval_size = min(1000, len(train_dataset))
