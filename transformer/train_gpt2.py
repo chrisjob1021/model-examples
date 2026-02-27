@@ -617,10 +617,10 @@ def main():
     # Stage 1: Pretraining
     # ---------------------------------------------------------------
     if args.stage in ("pretrain", "all"):
-        # Dataset: allenai/dolma — 3T+ tokens, sample ~10-20B for 124M model
-        # For feasible training, start with a smaller subset (controlled by --max-tokens)
+        # Dataset: allenai/dolma — 3T+ tokens, sample ~40B for 124M model
+        # ~320 tokens/param, well beyond chinchilla-optimal — small models benefit from overtraining
         pretrain_dataset_name = "allenai/dolma3_pool"
-        default_pretrain_tokens = 10_000_000_000  # 10B tokens (~80 tokens/param, ~24h on 1x L40S)
+        default_pretrain_tokens = 40_000_000_000  # 40B tokens (~320 tokens/param, ~6 days on 1x L40S)
 
         max_tokens = args.max_tokens or default_pretrain_tokens
 
@@ -683,8 +683,8 @@ def main():
     if args.stage in ("midtrain", "all"):
         midtrain_dataset_name = "allenai/dolma3_dolmino_mix-10B-1025"
 
-        # For 124M model, use ~1-2B tokens for mid-training
-        midtrain_max_tokens = args.max_tokens or 1_000_000_000
+        # For 124M model, use ~5B tokens for mid-training (~12% of pretrain budget)
+        midtrain_max_tokens = args.max_tokens or 5_000_000_000
 
         train_dataset = load_and_prepare_pretrain_dataset(
             midtrain_dataset_name, tokenizer, max_length,

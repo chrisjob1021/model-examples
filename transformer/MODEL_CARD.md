@@ -32,7 +32,7 @@ General web-scale language modeling.
 | Setting       | Value                                                                            |
 |---------------|----------------------------------------------------------------------------------|
 | Dataset       | [allenai/dolma](https://hf.co/datasets/allenai/dolma) (3T+ tokens, ODC-BY)      |
-| Subset        | Sample ~10-20B tokens (feasible for 124M on consumer GPU)                        |
+| Subset        | ~40B tokens (~320 tokens/param, ~6 days on 1x L40S)                             |
 | Objective     | Autoregressive next-token prediction                                             |
 | Context       | 1024 tokens                                                                      |
 
@@ -43,6 +43,7 @@ High-quality data mix to sharpen capabilities. Learning rate decays toward zero.
 |---------------|--------------------------------------------------------------------------------------------------------------------|
 | Dataset       | [allenai/dolma3_dolmino_mix-10B-1025](https://hf.co/datasets/allenai/dolma3_dolmino_mix-10B-1025) (ODC-BY)         |
 | Content       | Curated subset: math, code, science, high-quality web (same mix used for OLMo 3 stage 2 micro-anneals)            |
+| Subset        | ~5B tokens (~12% of pretrain budget)                                                                               |
 | Schedule      | Cosine decay to 0, short relative to pretraining                                                                   |
 
 #### Stage 3: Post-training (SFT)
@@ -53,10 +54,45 @@ Instruction following and chat capability.
 | Dataset       | [allenai/tulu-3-sft-mixture](https://hf.co/datasets/allenai/tulu-3-sft-mixture) (ODC-BY)            |
 | Content       | FLAN, OpenAssistant, math (MetaMathQA, personas), code, instruction following, safety (WildGuardMix) |
 | Format        | Multi-turn chat with system/user/assistant roles                                                     |
+| Budget        | ~1.5B tokens (326K examples × ~2300 avg tokens × 2 epochs)                                          |
+
+### Phase 1 Evaluation
+
+Run after each training stage to track progress. The evaluation script (`evaluate_model.py`)
+handles all of this.
+
+#### Perplexity (WikiText-2 test set)
+
+Primary quantitative metric. Measures how well the model predicts held-out text.
+
+| Checkpoint         | Target perplexity | Notes                                    |
+|--------------------|-------------------|------------------------------------------|
+| Pretrain (40B tok) | ~29-35            | Match or approach HF GPT-2 124M (~29.4)  |
+| Mid-train          | ~25-30            | High-quality data should improve          |
+| SFT                | ~30-40            | May increase — SFT optimizes for chat, not raw perplexity |
+
+Reference baselines (WikiText-2 test, published):
+
+| Model              | Perplexity |
+|--------------------|------------|
+| GPT-2 124M (HF)   | ~29.4      |
+| GPT-2 355M (HF)   | ~21.1      |
+| GPT-2 774M (HF)   | ~17.5      |
+
+#### Text Generation (qualitative)
+
+Run with `--generate` flag. Spot-check coherence, repetition, and instruction following
+(post-SFT). Not scored — just a sanity check that the model produces reasonable text.
 
 ---
 
 ## Phase 2: Architecture Progression (7B scale, 8x H100)
+
+Phase 2 starts fresh — the 124M checkpoint does not carry over. Weight shapes are
+incompatible (768 hidden → 4096, 12 layers → 32), so there is no meaningful weight
+mapping. Phase 1 is a self-contained exercise: implement GPT-2, validate it, train it,
+run the full 3-stage pipeline. Phase 2 trains a 7B GPT-2 baseline from scratch, then
+incrementally morphs it toward the GPT-OSS architecture via checkpoint surgery.
 
 Validate GPT-OSS-20B architecture by loading `openai/gpt-oss-20b` weights, then train
 each architectural change from GPT-2 baseline at 7B scale.
@@ -205,11 +241,19 @@ Order is from simplest/most independent to most complex/interdependent.
 | Attention impl  | Flash Attention 2|
 | **Total params**| **~6.8B**        |
 
-**Flash Attention:** Used from the baseline onward — not an architecture change but a
-fused CUDA kernel that computes exact attention in O(n) memory instead of O(n²) by
-tiling the computation and never materializing the full attention matrix. Critical for
-training at 7B scale. Natively supports causal masking and sliding window masking
-(Step 5), so it carries through all subsequent steps with no modification.
+**Infrastructure for 7B training:**
+
+| Requirement              | Detail                                                                     |
+|--------------------------|----------------------------------------------------------------------------|
+| **FSDP**                 | Fully Sharded Data Parallel across 8 GPUs. Shards model weights, gradients, and optimizer states — 7B in BF16 is ~14GB for weights alone, plus ~42GB optimizer states (Adam) |
+| **Flash Attention 2**    | Fused CUDA kernel: exact attention in O(n) memory instead of O(n²) by tiling and never materializing the full attention matrix. ~2-3x faster than standard SDPA. Natively supports causal and sliding window masks (Step 5) |
+| **Gradient checkpointing** | Recompute activations during backward pass instead of storing them. Trades ~30% compute for ~60% activation memory savings — necessary at 7B |
+| **BF16 mixed precision** | BFloat16 for forward/backward, FP32 master weights in optimizer. Standard at this scale |
+
+The model code (`GPT2Block`, `GPT2MLP`, `ManualCausalSelfAttention`) is unchanged from
+Phase 1 — `GPT2Config` parameterizes everything, so scaling to 7B is just bigger config
+values. The infrastructure changes (FSDP, Flash Attention, gradient checkpointing) are
+training harness concerns, not architecture changes.
 
 ---
 
@@ -527,9 +571,9 @@ Trainable on a single GPU (L40S, A100, or even consumer 3090/4090).
 
 | Stage         | Tokens  | Time estimate (1x L40S) |
 |---------------|---------|-------------------------|
-| Pretraining   | 10-20B  | 1-3 days                |
-| Mid-training  | 1-2B    | ~4 hours                |
-| Post-training | ~100M   | ~30 min                 |
+| Pretraining   | ~40B    | ~6 days                 |
+| Mid-training  | ~5B     | ~18 hours               |
+| Post-training | ~1.5B   | ~6 hours                |
 
 ### Phase 2: Architecture Steps (7B, 8x H100)
 
