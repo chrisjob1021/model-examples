@@ -169,12 +169,21 @@ def tokenize_sft(examples, tokenizer, max_length):
     return {"input_ids": all_input_ids, "labels": all_labels}
 
 
-def build_streaming_eval_dataset(dataset_name, tokenizer, max_length, num_sequences=1000, split="train"):
-    """Materialize a small eval set by streaming from the end of a dataset split."""
+def build_streaming_eval_dataset(dataset_name, tokenizer, max_length, num_sequences=1000, split="train", skip=0):
+    """Materialize a small held-out eval set by streaming from deep in a dataset split.
+
+    Parameters
+    ----------
+    skip : int
+        Number of raw examples to skip before materializing eval sequences.
+        Should be set beyond the training token budget to avoid overlap.
+    """
     from datasets import Dataset as HFDataset
 
-    print(f"Building eval set ({num_sequences} sequences) from {dataset_name}...")
+    print(f"Building eval set ({num_sequences} sequences) from {dataset_name} (skip={skip:,})...")
     raw = load_dataset(dataset_name, split=split, streaming=True, trust_remote_code=True)
+    if skip:
+        raw = raw.skip(skip)
     all_input_ids = []
     all_labels = []
     batch_texts = []
@@ -633,14 +642,35 @@ def main():
 
         is_streaming = isinstance(train_dataset, IterableDataset)
         if is_streaming:
+            # We need eval data that training will never reach. The stream
+            # is read front-to-back, so we skip past all the examples the
+            # trainer could possibly consume.
+            #
+            # Math:
+            #   max_tokens        = total token budget (e.g. 40B)
+            #   avg_tok_per_ex    = ~300 tokens per raw Dolma document (rough average;
+            #                       same estimate used in load_and_prepare_pretrain_dataset)
+            #   training_examples = max_tokens / avg_tok_per_ex
+            #                     = 40B / 300 ≈ 133M examples
+            #   eval_skip         = training_examples * 1.2   (20% safety margin)
+            #                     ≈ 160M examples
+            #
+            # This puts the eval window well beyond the training window in the
+            # stream, so the two sets never overlap.
+            avg_tok_per_ex = 300
+            training_examples = max_tokens / avg_tok_per_ex
+            eval_skip = int(training_examples * 1.2)
             eval_dataset = build_streaming_eval_dataset(
-                pretrain_dataset_name, tokenizer, max_length,
+                pretrain_dataset_name, tokenizer, max_length, skip=eval_skip,
             )
             # max_steps = total_tokens / (batch_size * grad_accum * max_length)
             pretrain_max_steps = int(max_tokens / (args.batch_size * args.grad_accum * max_length))
         else:
+            # Non-streaming: split the tail off as a held-out eval set and
+            # exclude it from training so the two never overlap.
             eval_size = min(1000, len(train_dataset))
-            eval_dataset = train_dataset.select(range(eval_size))
+            eval_dataset = train_dataset.select(range(len(train_dataset) - eval_size, len(train_dataset)))
+            train_dataset = train_dataset.select(range(len(train_dataset) - eval_size))
             pretrain_max_steps = -1
 
         # GPT-2 training hyperparameters (from Chinchilla/GPT-3 conventions)
@@ -695,13 +725,21 @@ def main():
 
         is_streaming = isinstance(train_dataset, IterableDataset)
         if is_streaming:
+            # Same logic as pretrain: skip past all examples the trainer will
+            # consume so eval is held-out. See pretrain block for full derivation.
+            #   midtrain_max_tokens = 5B, avg ~300 tok/example → ~17M examples
+            #   skip = 17M * 1.2 ≈ 20M examples into the stream
+            avg_tok_per_ex = 300
+            training_examples = midtrain_max_tokens / avg_tok_per_ex
+            eval_skip = int(training_examples * 1.2)
             eval_dataset = build_streaming_eval_dataset(
-                midtrain_dataset_name, tokenizer, max_length,
+                midtrain_dataset_name, tokenizer, max_length, skip=eval_skip,
             )
             midtrain_max_steps = int(midtrain_max_tokens / (args.batch_size * args.grad_accum * max_length))
         else:
             eval_size = min(1000, len(train_dataset))
-            eval_dataset = train_dataset.select(range(eval_size))
+            eval_dataset = train_dataset.select(range(len(train_dataset) - eval_size, len(train_dataset)))
+            train_dataset = train_dataset.select(range(len(train_dataset) - eval_size))
             midtrain_max_steps = -1
 
         # Mid-training uses decaying LR toward 0 (cosine to minimum)
@@ -746,8 +784,11 @@ def main():
             sft_dataset_name, tokenizer, max_length, split="train"
         )
 
+        # SFT is the highest overfitting risk (small dataset, multiple epochs),
+        # so a held-out eval set matters most here. Split off the tail.
         eval_size = min(1000, len(train_dataset))
-        eval_dataset = train_dataset.select(range(eval_size))
+        eval_dataset = train_dataset.select(range(len(train_dataset) - eval_size, len(train_dataset)))
+        train_dataset = train_dataset.select(range(len(train_dataset) - eval_size))
 
         # SFT uses even lower LR and shorter training
         if args.stage == "all":
